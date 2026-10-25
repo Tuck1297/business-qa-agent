@@ -209,6 +209,8 @@ export async function* readServerSentEvents(body: ReadableStream<Uint8Array>): A
   const reader = body.getReader();
   try {
     while (true) {
+      // Stream chunks arrive one after another; reading them in order is the point.
+      // oxlint-disable-next-line no-await-in-loop
       const { value, done } = await reader.read();
       if (value) buffer += decoder.decode(value, { stream: true });
       if (done) buffer += decoder.decode();

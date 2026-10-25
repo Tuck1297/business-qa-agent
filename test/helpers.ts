@@ -108,3 +108,15 @@ export function streamingResponse(pieces: string[], init: ResponseInit = { statu
   });
   return new Response(body, { headers: { 'Content-Type': 'text/event-stream' }, ...init });
 }
+
+/** The URL a fetch call was made with, as text. */
+export function urlOf(input: string | URL | Request): string {
+  if (typeof input === 'string') return input;
+  return input instanceof Request ? input.url : input.href;
+}
+
+/** The JSON body a fetch call sent (these clients always send a string body). */
+// oxlint-disable-next-line typescript/no-explicit-any -- tests read arbitrary fields from the sent body
+export function jsonBody(init: RequestInit): any {
+  return typeof init.body === 'string' ? JSON.parse(init.body) : null;
+}

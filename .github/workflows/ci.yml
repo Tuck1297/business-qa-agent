@@ -27,13 +27,19 @@ jobs:
           }
 
       - name: Lint (oxlint, type-aware)
+        run: npx oxlint --format=github
+
+      # GitHub shows at most 10 errors and 10 warnings per step, so on failure post the whole report too.
+      - name: Full oxlint report
+        if: failure()
         run: |
-          npx oxlint --format=github || {
-            # GitHub shows at most 10 errors and 10 warnings per step; add one annotation with the full report.
-            report=$(npx oxlint --format=unix 2>&1 | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')
-            echo "::error title=oxlint full report::${report}"
-            exit 1
-          }
+          npx oxlint --format=unix > oxlint-report.txt 2>&1 || true
+          node -e "
+            const text = require('fs').readFileSync('oxlint-report.txt', 'utf8');
+            const esc = (s) => s.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+            for (let i = 0, n = 1; i < text.length && n <= 10; i += 3000, n++)
+              console.log('::error title=oxlint report part ' + n + '::' + esc(text.slice(i, i + 3000)));
+          "
 
       - run: npm run typecheck
       - run: npm test

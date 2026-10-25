@@ -118,20 +118,18 @@ export function loadConfig(env: Env = process.env): Config {
 
 function checkLocale(locale: string): string {
   try {
-    new Intl.NumberFormat(locale);
-    return locale;
+    const [canonical] = Intl.getCanonicalLocales(locale);
+    if (canonical) return canonical;
   } catch {
-    throw new Error(`LOCALE "${locale}" isn't a valid locale (e.g. en-US).`);
+    // Invalid language tag; reported below.
   }
+  throw new Error(`LOCALE "${locale}" isn't a valid locale (e.g. en-US).`);
 }
 
 function checkCurrency(currency: string): string {
-  try {
-    new Intl.NumberFormat('en-US', { style: 'currency', currency });
-    return currency.toUpperCase();
-  } catch {
-    throw new Error(`CURRENCY "${currency}" isn't a valid ISO currency code (e.g. USD).`);
-  }
+  const code = currency.toUpperCase();
+  if (Intl.supportedValuesOf('currency').includes(code)) return code;
+  throw new Error(`CURRENCY "${currency}" isn't a valid ISO currency code (e.g. USD).`);
 }
 
 export function isLoopback(host: string): boolean {

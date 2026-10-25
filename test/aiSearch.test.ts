@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { AiSearchClient, parseSearchResponse } from '../src/tools/documents/aiSearch.ts';
+import { jsonBody, urlOf } from './helpers.ts';
 
 const chunk = (i: number, key = `policies/handbook-${i}.pdf`) => ({
   id: `c${i}`,
@@ -23,7 +24,7 @@ describe('Cloudflare AI Search client', () => {
       matchThreshold: 0.4,
       timeoutMs: 5_000,
       fetch: async (url, init) => {
-        captured = { url: String(url), init: init ?? {} };
+        captured = { url: urlOf(url), init: init ?? {} };
         return new Response(
           JSON.stringify({ success: true, errors: [], result: { search_query: 'pto', chunks: [chunk(1), chunk(2)] } }),
         );
@@ -34,7 +35,7 @@ describe('Cloudflare AI Search client', () => {
       captured!.url,
       'https://api.cloudflare.com/client/v4/accounts/acc123/ai-search/namespaces/default/instances/business-docs/search',
     );
-    const body = JSON.parse(String(captured!.init.body));
+    const body = jsonBody(captured!.init);
     assert.deepEqual(body, {
       messages: [{ role: 'user', content: 'How much PTO do part-timers get?' }],
       ai_search_options: { retrieval: { max_num_results: 8, match_threshold: 0.4 } },
