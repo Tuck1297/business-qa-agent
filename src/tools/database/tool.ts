@@ -98,17 +98,33 @@ export async function runDatabaseTools(ctx: DatabaseToolsContext): Promise<Datab
             arguments: call.args,
             rowCount: r.rows.length,
             truncated: r.truncated,
-            ...(ctx.showSql ? (({ sql, params }) => ({ sql, params }))(ctx.db.prepare(call.tool, call.args)) : {}),
+            ...(ctx.showSql ? sqlDetails(ctx.db, call) : {}),
           }),
           `run_tool:${call.id}`,
         );
-        return { ...call, status: 'ok', result, error: null };
+        return { id: call.id, tool: call.tool, args: call.args, status: 'ok', result, error: null };
       } catch (error) {
-        return { ...call, status: 'failed', result: null, error: errorMessage(error) };
+        return {
+          id: call.id,
+          tool: call.tool,
+          args: call.args,
+          status: 'failed',
+          result: null,
+          error: errorMessage(error),
+        };
       }
     }),
   );
   return { status: 'ok', calls };
+}
+
+/** The statement and parameters a call ran with, for step events (client only). */
+function sqlDetails(
+  db: DatabaseService,
+  call: PlannedCall,
+): { sql: string; params: Array<{ name: string; value: ArgValue }> } {
+  const { sql, params } = db.prepare(call.tool, call.args);
+  return { sql, params };
 }
 
 async function selectTools(ctx: DatabaseToolsContext): Promise<Array<{ tool: DbTool; probability: number }>> {
@@ -136,7 +152,7 @@ export function rankShortlist(
   return tools
     .map((tool) => ({ tool, probability: probability.get(tool.name) ?? 0 }))
     .filter((t) => t.probability >= threshold)
-    .sort((a, b) => b.probability - a.probability)
+    .toSorted((a, b) => b.probability - a.probability)
     .slice(0, MAX_SHORTLIST);
 }
 
@@ -160,6 +176,8 @@ async function planCalls(
   let input = ctx.question;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
+    // Sequential on purpose: the second attempt only happens if the first is rejected.
+    // oxlint-disable-next-line no-await-in-loop
     const raw = await ctx.llm.callTools({
       instructions,
       input,

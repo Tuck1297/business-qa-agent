@@ -7,6 +7,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { findNamedParams } from './sql.ts';
+import { toText } from '../../text.ts';
 
 export type Engine = 'postgres' | 'sqlserver';
 export type ParamType = 'string' | 'number' | 'integer' | 'boolean' | 'date' | 'datetime';
@@ -108,14 +109,15 @@ export async function loadTools(path: string): Promise<ToolSet> {
     text = await readFile(path, 'utf8');
   } catch (error) {
     throw new Error(
-      `Couldn't read the tools file at ${path}. Copy tools.example.json to tools.json and define your tools. (${String(error)})`,
+      `Couldn't read the tools file at ${path}. Copy tools.example.json to tools.json and define your tools. (${toText(error)})`,
+      { cause: error },
     );
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch (error) {
-    throw new Error(`The tools file at ${path} isn't valid JSON: ${String(error)}`);
+    throw new Error(`The tools file at ${path} isn't valid JSON: ${toText(error)}`, { cause: error });
   }
   return validateTools(parsed);
 }
@@ -157,7 +159,7 @@ export function validateTools(value: unknown): ToolSet {
       problems.push(`${where}: description is required; it's how the agent decides when to use the tool.`);
     }
     const engine = typeof tool.source === 'string' ? sources.get(tool.source) : undefined;
-    if (!engine) problems.push(`${where}: source "${String(tool.source)}" isn't one of the sources.`);
+    if (!engine) problems.push(`${where}: source "${toText(tool.source)}" isn't one of the sources.`);
     if (tool.resultDescription !== undefined && typeof tool.resultDescription !== 'string')
       problems.push(`${where}: resultDescription must be text.`);
     if (
@@ -192,7 +194,7 @@ export function validateTools(value: unknown): ToolSet {
       }
       if (p.default !== undefined && p.default !== null && PARAM_TYPES.includes(p.type as ParamType)) {
         const ok = checkValueType(p.default, p.type as ParamType);
-        if (!ok) problems.push(`${pw}: default doesn't match the type ${String(p.type)}.`);
+        if (!ok) problems.push(`${pw}: default doesn't match the type ${toText(p.type)}.`);
       }
       for (const key of ['minimum', 'maximum', 'maxLength'] as const) {
         if (p[key] !== undefined && typeof p[key] !== 'number') problems.push(`${pw}: ${key} must be a number.`);

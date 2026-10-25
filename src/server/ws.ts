@@ -16,6 +16,7 @@ import type { Server } from 'node:http';
 import { errorMessage } from '../events.ts';
 import { MAX_QUESTION_LENGTH } from '../agent/agent.ts';
 import { tokensMatch, type AskHandler } from './http.ts';
+import { toText } from '../text.ts';
 
 // The parts of `ws` used here, declared locally so the core doesn't depend on @types/ws.
 interface WsSocket {
@@ -84,7 +85,7 @@ export function handleConnection(socket: WsSocket, agent: AskHandler, apiToken: 
     if (isBinary) return send({ type: 'error', error: 'Send JSON text messages.' });
     let message: Record<string, unknown>;
     try {
-      const parsed: unknown = JSON.parse(String(data));
+      const parsed: unknown = JSON.parse(Buffer.isBuffer(data) ? data.toString('utf8') : toText(data));
       if (!parsed || typeof parsed !== 'object') throw new Error();
       message = parsed as Record<string, unknown>;
     } catch {
@@ -111,7 +112,7 @@ export function handleConnection(socket: WsSocket, agent: AskHandler, apiToken: 
       return;
     }
     if (message.type !== 'ask')
-      return send({ type: 'error', error: `Unknown message type "${String(message.type)}".` });
+      return send({ type: 'error', error: `Unknown message type "${toText(message.type)}".` });
     if (current)
       return send({
         type: 'error',

@@ -11,6 +11,8 @@
  * /autorag/rags/{name}/search endpoints still work, but this client uses the new ones.
  */
 
+import { toText } from '../../text.ts';
+
 export interface DocumentChunk {
   id: string;
   /** Source file path or URL in the data source (R2 key or crawled URL). */
@@ -108,7 +110,7 @@ export function parseSearchResponse(body: unknown): DocumentChunk[] {
 function describeErrors(body: unknown): string {
   if (!isObject(body) || !Array.isArray(body.errors)) return '';
   return body.errors
-    .map((e) => (isObject(e) ? `${e.code ?? ''} ${e.message ?? ''}`.trim() : String(e)))
+    .map((e) => (isObject(e) ? `${toText(e.code)} ${toText(e.message)}`.trim() : toText(e)))
     .filter(Boolean)
     .join('; ');
 }

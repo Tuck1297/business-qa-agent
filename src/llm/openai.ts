@@ -17,6 +17,7 @@ import {
   type TextStreamRequest,
   type ToolCallRequest,
 } from './types.ts';
+import { toText } from '../text.ts';
 
 export interface OpenAiOptions {
   apiKey: string;
@@ -152,14 +153,14 @@ export function parseDecisionAnswers(body: unknown): DecisionAnswer[] {
         probabilities: Array.isArray(probabilities)
           ? probabilities
               .map((p) => ({
-                value: String(readPath(p, ['value'])),
+                value: toText(readPath(p, ['value'])),
                 probability: Number(readPath(p, ['probability'])),
               }))
               .filter((p) => Number.isFinite(p.probability))
           : [],
       };
     }
-    throw new Error(`Unsupported Decisions answer type "${String(type)}" for "${name}".`);
+    throw new Error(`Unsupported Decisions answer type "${toText(type)}" for "${name}".`);
   });
 }
 
@@ -187,7 +188,7 @@ export function extractFunctionCalls(body: unknown): FunctionCall[] {
       calls.push({
         name,
         arguments: typeof args === 'string' ? args : JSON.stringify(args ?? {}),
-        callId: String(callId ?? `call_${calls.length + 1}`),
+        callId: callId === undefined ? `call_${calls.length + 1}` : toText(callId),
       });
     } else if (type === 'message') {
       const content = readPath(item, ['content']);
