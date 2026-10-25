@@ -210,16 +210,24 @@ An automated test runs a full question and checks that no row value appears in a
 
 ## Development
 
-Type checking uses **TypeScript 7**, the native compiler (a Go port of TypeScript, typically 8–12× faster than 6.x). It's the regular `typescript` package (`^7.0.0`), still run as `tsc`; CI fails if any other major version is installed. Node runs the `.ts` files directly by stripping types, so the compiler is only used for checking.
-
 ```bash
 npm test               # node:test, no network
 npm run typecheck      # tsc --noEmit (TypeScript 7)
+npm run lint           # oxlint, type-aware (zero warnings allowed); lint:fix applies safe fixes
+npm run format         # oxfmt; format:check only reports
+npm run check          # format:check + lint + typecheck + test, the same as CI
 npm run tools:check    # validate tools.json; add -- --run to execute the examples
 npm run dev            # restart on file changes
 ```
 
-Tests cover tool definitions, named-parameter binding for both engines, argument validation, merge fields and the streaming merger, the OpenAI and AI Search clients (mocked HTTP), routing, full agent runs including the no-data-to-the-model check, and the HTTP, SSE and WebSocket transports.
+**Tooling**
+
+- **TypeScript 7**, the native compiler (a Go port of TypeScript, typically 8–12× faster than 6.x), for type checking. It's the regular `typescript` package (`^7.0.0`), still run as `tsc`; CI fails if any other major version is installed. Node runs the `.ts` files directly by stripping types, so the compiler only checks.
+- **oxlint** (Rust) for linting, configured in `.oxlintrc.json`: correctness rules as errors, suspicious and performance rules as warnings, and `maxWarnings: 0`, so any warning fails. **Type-aware rules** (floating promises, misused promises, unsafe stringification and more) run through `oxlint-tsgolint`, which is built on TypeScript 7. Two rules are off on purpose: `typescript/no-unsafe-type-assertion` (the tools-file validator checks values at runtime, then narrows them) and `typescript/consistent-return` (TypeScript already checks exhaustive switches). Tests may use `any` and un-awaited `describe`/`it`.
+- **oxfmt** (Rust) for formatting, configured in `.oxfmtrc.json`: Prettier-compatible style, 120-character lines, single quotes. Markdown and the demo page aren't formatted.
+- **Format workflow:** run **Actions → Format → Run workflow** on GitHub, or push a branch named `format/<anything>`. It runs oxfmt and commits the result to that branch.
+
+CI runs, in order: TypeScript version check, `oxfmt --check`, `oxlint` (findings show as annotations on the pull request, plus the full report when it fails), type check, tests.
 
 ## Status and limits
 
