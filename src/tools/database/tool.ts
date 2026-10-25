@@ -1,16 +1,23 @@
 /**
- * The database tool: pick a table or view (Decisions API), plan the query
- * (Responses API structured output, validated, one retry), then run it.
+ * The database route. Your tools are the only path to the database:
+ *
+ *   select_tools     OpenAI Decisions API, one predicate per tool ("would this tool return data
+ *                    the question needs?"), so the model only sees a short list of relevant tools
+ *   plan_tool_calls  OpenAI function calling over the short list: the model picks calls and fills
+ *                    in their parameters. It never writes SQL.
+ *   run_tool         your SQL with the validated arguments bound, read-only, row-capped
+ *
+ * The rows stay in this process. The model later sees only call ids, arguments and field
+ * descriptions, and writes merge fields that the service fills in.
  */
 
-import { runStep, type EventSink } from '../../events.ts';
-import type { LlmClient } from '../../llm/types.ts';
-import { describeTableForSelection, listTables, type TableRef } from './catalog.ts';
-import { compileQuery, type CompiledQuery } from './compile.ts';
+import { errorMessage, runStep, type EventSink } from '../../events.ts';
+import type { DecisionAnswer, FunctionCall, LlmClient } from '../../llm/types.ts';
+import { ArgumentError, toFunctionTool, validateArguments, type ArgValue } from './arguments.ts';
+import { findTool, type DbTool } from './definitions.ts';
 import type { DatabaseService, QueryResult } from './service.ts';
-import { buildSpecSchema, SpecError, validateSpec, type QuerySpec } from './spec.ts';
 
-export interface DatabaseToolContext {
+export interface DatabaseToolsContext {
   llm: LlmClient;
   db: DatabaseService;
   emit: EventSink;
@@ -18,175 +25,156 @@ export interface DatabaseToolContext {
   question: string;
   today: string;
   timezone: string;
-  maxRows: number;
+  /** A tool is offered to the model when its Decisions probability is at least this. */
+  selectThreshold: number;
+  maxCalls: number;
   showSql: boolean;
-  tableConfidenceWarning: number;
   signal?: AbortSignal;
 }
 
-export interface DatabaseToolResult {
-  status: 'answered' | 'no_table';
-  table: string | null;
-  explanation: string;
-  sql: string | null;
-  params: unknown[];
+export interface ToolCallResult {
+  /** Merge-field id: the tool name, then tool_2, tool_3 for repeat calls. */
+  id: string;
+  tool: DbTool;
+  args: Record<string, ArgValue>;
+  status: 'ok' | 'failed';
   result: QueryResult | null;
+  error: string | null;
 }
 
-/** The Decisions API accepts up to 255 choices; one is reserved for "none". */
-export const MAX_SELECTABLE_TABLES = 254;
-export const NO_TABLE = 'none';
+export interface DatabaseRouteResult {
+  /** 'no_tool' when no defined tool fits the question. */
+  status: 'ok' | 'no_tool';
+  calls: ToolCallResult[];
+}
 
-export async function runDatabaseTool(ctx: DatabaseToolContext): Promise<DatabaseToolResult> {
-  const tables = listTables(ctx.db.catalog);
+/** Most tools offered to the model at once; OpenAI suggests staying under 20 functions. */
+export const MAX_SHORTLIST = 8;
 
-  const selection = await runStep(
+export async function runDatabaseTools(ctx: DatabaseToolsContext): Promise<DatabaseRouteResult> {
+  const shortlist = await runStep(
     ctx.emit,
     ctx.runId,
-    'select_table',
-    'Choosing a table or view',
-    () => selectTable(ctx, tables),
+    'select_tools',
+    'Choosing database tools',
+    () => selectTools(ctx),
     (s) => ({
-      table: s.ref?.id ?? null,
-      confidence: round(s.confidence),
-      uncertain: s.ref !== null && s.confidence < ctx.tableConfidenceWarning,
-      alternatives: s.alternatives,
-      method: s.method,
+      considered: ctx.db.tools.tools.length,
+      selected: s.map((x) => ({ tool: x.tool.name, probability: round(x.probability) })),
     }),
   );
-  if (!selection.ref) {
-    return { status: 'no_table', table: null, explanation: 'No table or view in the catalog fits this question.', sql: null, params: [], result: null };
-  }
-  const ref = selection.ref;
+  if (shortlist.length === 0) return { status: 'no_tool', calls: [] };
 
   const planned = await runStep(
     ctx.emit,
     ctx.runId,
-    'build_query',
-    `Planning a query on ${ref.id}`,
-    () => planQuery(ctx, ref),
-    (p) => ({
-      explanation: p.spec.explanation,
-      attempts: p.attempts,
-      ...(ctx.showSql ? { sql: p.compiled.sql, params: p.compiled.params } : {}),
+    'plan_tool_calls',
+    'Filling in tool parameters',
+    () => planCalls(ctx, shortlist.map((s) => s.tool)),
+    (p) => ({ attempts: p.attempts, calls: p.calls.map((c) => ({ id: c.id, tool: c.tool.name, arguments: c.args })), dropped: p.dropped }),
+  );
+  if (planned.calls.length === 0) return { status: 'no_tool', calls: [] };
+
+  const calls = await Promise.all(
+    planned.calls.map(async (call): Promise<ToolCallResult> => {
+      try {
+        const result = await runStep(
+          ctx.emit,
+          ctx.runId,
+          'run_tool',
+          `Running ${call.id}`,
+          () => ctx.db.run(call.tool, call.args),
+          (r) => ({
+            id: call.id,
+            tool: call.tool.name,
+            arguments: call.args,
+            rowCount: r.rows.length,
+            truncated: r.truncated,
+            ...(ctx.showSql ? (({ sql, params }) => ({ sql, params }))(ctx.db.prepare(call.tool, call.args)) : {}),
+          }),
+          `run_tool:${call.id}`,
+        );
+        return { ...call, status: 'ok', result, error: null };
+      } catch (error) {
+        return { ...call, status: 'failed', result: null, error: errorMessage(error) };
+      }
     }),
   );
-
-  const result = await runStep(
-    ctx.emit,
-    ctx.runId,
-    'run_query',
-    `Running the query on ${ref.source.name}`,
-    () => ctx.db.run(ref.source, planned.compiled),
-    (r) => ({ rowCount: r.rows.length, truncated: r.truncated, columns: r.columns }),
-  );
-
-  return {
-    status: 'answered',
-    table: ref.id,
-    explanation: planned.spec.explanation,
-    sql: planned.compiled.sql,
-    params: planned.compiled.params,
-    result,
-  };
+  return { status: 'ok', calls };
 }
 
-interface Selection {
-  ref: TableRef | null;
-  confidence: number;
-  alternatives: Array<{ table: string; probability: number }>;
-  method: 'only_table' | 'decisions_api';
-}
-
-async function selectTable(ctx: DatabaseToolContext, tables: TableRef[]): Promise<Selection> {
-  if (tables.length === 1) {
-    return { ref: tables[0] ?? null, confidence: 1, alternatives: [], method: 'only_table' };
-  }
-  if (tables.length > MAX_SELECTABLE_TABLES) {
-    throw new Error(`The catalog lists ${tables.length} tables; table selection supports up to ${MAX_SELECTABLE_TABLES}. Split the catalog or pre-filter it.`);
-  }
+async function selectTools(ctx: DatabaseToolsContext): Promise<Array<{ tool: DbTool; probability: number }>> {
+  const tools = ctx.db.tools.tools;
   const answers = await ctx.llm.decide(
-    ctx.question,
-    [
-      {
-        type: 'choice',
-        name: 'table',
-        instructions:
-          'Which single table or view holds the data needed to answer this business question? Judge by what each one contains. Choose "none" if none of them can answer it.',
-        choices: [
-          ...tables.map((t) => ({ value: t.id, description: describeTableForSelection(t) })),
-          { value: NO_TABLE, description: 'None of these tables or views holds the data this question needs.' },
-        ],
-      },
-    ],
+    `Question: ${ctx.question}\nToday: ${ctx.today} (${ctx.timezone})`,
+    tools.map((tool) => ({
+      type: 'predicate' as const,
+      name: tool.name,
+      instructions: `Calling the "${tool.name}" tool would return data needed to answer the question. What the tool does: ${tool.description.trim()}`,
+    })),
     ctx.signal,
   );
-  const answer = answers.find((a) => a.name === 'table');
-  if (!answer || answer.type === 'refusal') throw new Error('The decision model declined to choose a table.');
-  if (answer.type !== 'choice') throw new Error('The decision model returned an unexpected answer type for table selection.');
-
-  const alternatives = [...answer.probabilities]
-    .sort((a, b) => b.probability - a.probability)
-    .slice(0, 3)
-    .map((p) => ({ table: p.value, probability: round(p.probability) }));
-  const ref = answer.choice === NO_TABLE ? null : (tables.find((t) => t.id === answer.choice) ?? null);
-  if (answer.choice !== NO_TABLE && !ref) throw new Error(`The decision model chose an unknown table "${answer.choice}".`);
-  return { ref, confidence: answer.confidence, alternatives, method: 'decisions_api' };
+  return rankShortlist(tools, answers, ctx.selectThreshold);
 }
 
-async function planQuery(
-  ctx: DatabaseToolContext,
-  ref: TableRef,
-): Promise<{ spec: QuerySpec; compiled: CompiledQuery; attempts: number }> {
-  const schema = buildSpecSchema(ref.table, ctx.maxRows);
-  const instructions = buildPlannerInstructions(ref, ctx.today, ctx.timezone, ctx.maxRows);
+export function rankShortlist(tools: DbTool[], answers: DecisionAnswer[], threshold: number): Array<{ tool: DbTool; probability: number }> {
+  const probability = new Map(answers.flatMap((a) => (a.type === 'predicate' ? [[a.name, a.probability] as const] : [])));
+  return tools
+    .map((tool) => ({ tool, probability: probability.get(tool.name) ?? 0 }))
+    .filter((t) => t.probability >= threshold)
+    .sort((a, b) => b.probability - a.probability)
+    .slice(0, MAX_SHORTLIST);
+}
+
+interface PlannedCall {
+  id: string;
+  tool: DbTool;
+  args: Record<string, ArgValue>;
+}
+
+async function planCalls(ctx: DatabaseToolsContext, tools: DbTool[]): Promise<{ calls: PlannedCall[]; attempts: number; dropped: number }> {
+  const instructions = [
+    'You choose which database tools to call to answer a business question, and fill in their parameters.',
+    `Today is ${ctx.today} (${ctx.timezone}). Turn relative dates such as "last month", "this year" or "Q3" into explicit dates based on today.`,
+    "Use null for optional parameters the question doesn't specify.",
+    `Call a tool more than once only when the question needs it (for example to compare two periods). At most ${ctx.maxCalls} calls in total.`,
+    "You won't see the results; another step writes the answer.",
+  ].join('\n');
   let input = ctx.question;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const raw = await ctx.llm.structured({ instructions, input, schemaName: 'query_plan', schema, signal: ctx.signal });
+    const raw = await ctx.llm.callTools({ instructions, input, tools: tools.map(toFunctionTool), ...(ctx.signal ? { signal: ctx.signal } : {}) });
     try {
-      const spec = validateSpec(raw, ref.table, ctx.maxRows);
-      const compiled = compileQuery(spec, ref.table, ref.source.engine, ctx.maxRows);
-      return { spec, compiled, attempts: attempt };
+      const { calls, dropped } = resolveCalls(raw, tools, ctx.maxCalls);
+      return { calls, attempts: attempt, dropped };
     } catch (error) {
-      if (!(error instanceof SpecError) || attempt === 2) throw error;
-      // One retry with the exact problems, the pattern that recovers most invalid plans.
-      input = `${ctx.question}\n\nYour previous plan was rejected:\n- ${error.problems.join('\n- ')}\nReturn a corrected plan.`;
+      if (!(error instanceof ArgumentError) || attempt === 2) throw error;
+      // One retry with the exact problems.
+      input = `${ctx.question}\n\nYour previous tool call was rejected: ${error.message}\nCall the tools again with corrected arguments.`;
     }
   }
   throw new Error('Unreachable');
 }
 
-export function buildPlannerInstructions(ref: TableRef, today: string, timezone: string, maxRows: number): string {
-  const t = ref.table;
-  const lines = [
-    'You turn a business question into a query plan for ONE table or view. You never write SQL; you fill in the plan structure.',
-    `Today is ${today} (${timezone}). Turn relative dates such as "last month", "this year" or "Q3" into explicit YYYY-MM-DD ranges based on today.`,
-    '',
-    `Table: ${t.schema ? `${t.schema}.` : ''}${t.name} (${ref.source.engine})`,
-    `What it holds: ${t.description}`,
-    '',
-    'Columns:',
-    ...t.columns.map((c) => {
-      const samples = c.sampleValues?.length ? ` Example values: ${c.sampleValues.slice(0, 8).map((v) => JSON.stringify(v)).join(', ')}.` : '';
-      return `- ${c.name} (${c.type}): ${c.description}${samples}`;
-    }),
-  ];
-  if (t.metrics?.length) {
-    lines.push('', 'Metrics (predefined business calculations; prefer these over rebuilding them from columns):');
-    lines.push(...t.metrics.map((m) => `- ${m.name}: ${m.description}`));
+/** Check names, parse and validate arguments, cap the count, and assign merge-field ids. */
+export function resolveCalls(raw: FunctionCall[], allowed: DbTool[], maxCalls: number): { calls: PlannedCall[]; dropped: number } {
+  const calls: PlannedCall[] = [];
+  const seen = new Map<string, number>();
+  for (const call of raw.slice(0, maxCalls)) {
+    const tool = findTool({ sources: [], tools: allowed }, call.name);
+    if (!tool) throw new ArgumentError(call.name, [`"${call.name}" isn't one of the offered tools.`]);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(call.arguments);
+    } catch {
+      throw new ArgumentError(tool.name, ['Arguments must be valid JSON.']);
+    }
+    const args = validateArguments(tool, parsed);
+    const n = (seen.get(tool.name) ?? 0) + 1;
+    seen.set(tool.name, n);
+    calls.push({ id: n === 1 ? tool.name : `${tool.name}_${n}`, tool, args });
   }
-  lines.push(
-    '',
-    'Rules:',
-    '- Select only what the question needs. For totals, counts or averages use an aggregate or a metric; plain columns selected alongside them become the grouping.',
-    '- For "by month", "per week" and similar, select the date column with a timeGrain.',
-    '- For "top N" or "highest/lowest" questions, sort by the measured value and set limit to N.',
-    '- When the exact stored text is uncertain (names, descriptions), filter with contains rather than eq.',
-    `- Keep limit at or below ${maxRows}. Use null to get the default.`,
-    "- If this table can't fully answer the question, return the closest useful plan and say what's missing in the explanation.",
-  );
-  return lines.join('\n');
+  return { calls, dropped: Math.max(0, raw.length - maxCalls) };
 }
 
 function round(value: number): number {

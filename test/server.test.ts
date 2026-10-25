@@ -16,8 +16,8 @@ class ScriptedAgent implements AskHandler {
     const runId = 'run-1';
     const at = new Date().toISOString();
     emit({ type: 'run.started', runId, question, at });
-    emit({ type: 'step.started', runId, step: 'route', label: 'Routing', at });
-    emit({ type: 'step.completed', runId, step: 'route', label: 'Routing', durationMs: 1, data: { purpose: 'business_data' }, at });
+    emit({ type: 'step.started', runId, step: 'route', key: 'route', label: 'Routing', at });
+    emit({ type: 'step.completed', runId, step: 'route', key: 'route', label: 'Routing', durationMs: 1, data: { purpose: 'business_data' }, at });
     if (question.includes('slow')) {
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(resolve, 2_000);
@@ -37,8 +37,9 @@ class ScriptedAgent implements AskHandler {
     }
     emit({ type: 'answer.delta', runId, text: 'Hello ' });
     emit({ type: 'answer.delta', runId, text: 'world' });
-    emit({ type: 'run.completed', runId, answer: 'Hello world', citations: [], durationMs: 2, at });
-    return { runId, answer: 'Hello world', citations: [] };
+    const result = { runId, answer: 'Hello world', answerTemplate: null, citations: [], data: [], merge: null };
+    emit({ type: 'run.completed', ...result, durationMs: 2, at });
+    return result;
   }
 }
 

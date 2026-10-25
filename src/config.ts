@@ -25,8 +25,14 @@ export interface Config {
     predicateThreshold: number;
     /** Ask a follow-up question when "is ambiguous" is at least this likely. */
     clarifyThreshold: number;
-    /** Below this confidence the table choice is flagged as uncertain in the step data. */
-    tableConfidenceWarning: number;
+    /** A database tool is offered to the model when its Decisions probability is at least this. */
+    toolSelectThreshold: number;
+  };
+
+  /** How merge-field values are formatted. */
+  format: {
+    locale: string;
+    currency: string;
   };
 
   aiSearch: {
@@ -42,10 +48,12 @@ export interface Config {
   } | null;
 
   database: {
-    catalogPath: string;
+    toolsPath: string;
     maxRows: number;
     queryTimeoutMs: number;
-    /** Include the generated SQL and parameters in step events. */
+    /** Most tool calls per question. */
+    maxToolCalls: number;
+    /** Include each call's SQL and parameters in step events (sent to the client only). */
     showSql: boolean;
   };
 }
@@ -91,16 +99,39 @@ export function loadConfig(env: Env = process.env): Config {
     routing: {
       predicateThreshold: numberInRange(env, 'ROUTE_PREDICATE_THRESHOLD', 0.5, 0, 1),
       clarifyThreshold: numberInRange(env, 'ROUTE_CLARIFY_THRESHOLD', 0.7, 0, 1),
-      tableConfidenceWarning: numberInRange(env, 'TABLE_CONFIDENCE_WARNING', 0.6, 0, 1),
+      toolSelectThreshold: numberInRange(env, 'TOOL_SELECT_THRESHOLD', 0.5, 0, 1),
+    },
+    format: {
+      locale: checkLocale(env.LOCALE ?? 'en-US'),
+      currency: checkCurrency(env.CURRENCY ?? 'USD'),
     },
     aiSearch,
     database: {
-      catalogPath: env.CATALOG_PATH ?? 'catalog.json',
+      toolsPath: env.TOOLS_PATH ?? 'tools.json',
       maxRows: intInRange(env, 'MAX_ROWS', 200, 1, 10_000),
       queryTimeoutMs: intInRange(env, 'QUERY_TIMEOUT_MS', 10_000, 100, 300_000),
+      maxToolCalls: intInRange(env, 'MAX_TOOL_CALLS', 4, 1, 8),
       showSql: (env.SHOW_SQL ?? 'true').toLowerCase() !== 'false',
     },
   };
+}
+
+function checkLocale(locale: string): string {
+  try {
+    new Intl.NumberFormat(locale);
+    return locale;
+  } catch {
+    throw new Error(`LOCALE "${locale}" isn't a valid locale (e.g. en-US).`);
+  }
+}
+
+function checkCurrency(currency: string): string {
+  try {
+    new Intl.NumberFormat('en-US', { style: 'currency', currency });
+    return currency.toUpperCase();
+  } catch {
+    throw new Error(`CURRENCY "${currency}" isn't a valid ISO currency code (e.g. USD).`);
+  }
 }
 
 export function isLoopback(host: string): boolean {

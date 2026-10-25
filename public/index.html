@@ -39,7 +39,13 @@
   .time { margin-left: auto; color: var(--muted); font-size: 13px; white-space: nowrap; }
   .detail { color: var(--muted); font-size: 13px; margin: 4px 0 0 18px; overflow-wrap: anywhere; }
   pre { background: var(--code); border-radius: 6px; padding: 8px 10px; overflow-x: auto; font-size: 12.5px; margin: 6px 0 0 18px; }
-  #answer { white-space: pre-wrap; min-height: 1.5em; }
+  #answer { min-height: 1.5em; }
+  #answer p { margin: 0 0 10px; white-space: pre-wrap; }
+  #answer table { border-collapse: collapse; margin: 4px 0 12px; font-size: 14px; }
+  #answer th, #answer td { border-bottom: 1px solid var(--line); padding: 5px 10px; text-align: left; }
+  #answer td.num, #answer th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  #answer .note { color: var(--muted); font-size: 13px; }
+  .streaming { white-space: pre-wrap; }
   #citations { list-style: none; margin: 8px 0 0; padding-left: 0; color: var(--muted); font-size: 13px; }
   .error { color: var(--fail); }
 </style>
@@ -84,15 +90,15 @@
     return node;
   }
 
-  function stepRow(step, label) {
-    let row = rows.get(step);
+  function stepRow(key, label) {
+    let row = rows.get(key);
     if (!row) {
       row = el('li', 'running');
       const head = el('div', 'step-head');
       head.append(el('span', 'dot'), el('span', 'label', label), el('span', 'time', ''));
       row.append(head);
       stepsEl.append(row);
-      rows.set(step, row);
+      rows.set(key, row);
     }
     return row;
   }
@@ -100,27 +106,59 @@
   function describe(step, data) {
     const parts = [];
     if (step === 'route') parts.push(`purpose: ${data.purpose} · database: ${data.useDatabase} · documents: ${data.useDocuments}${data.clarify ? ' · asking a follow-up' : ''}`);
-    if (step === 'select_table') parts.push(`table: ${data.table ?? 'none'} (confidence ${data.confidence})${data.uncertain ? ' — uncertain' : ''}`);
-    if (step === 'build_query') parts.push(data.explanation + (data.attempts > 1 ? ` (took ${data.attempts} attempts)` : ''));
-    if (step === 'run_query') parts.push(`${data.rowCount} row(s)${data.truncated ? ', truncated' : ''}`);
+    if (step === 'select_tools') parts.push(data.selected.length ? `${data.selected.map((t) => `${t.tool} (${t.probability})`).join(', ')} of ${data.considered} tools` : `no tool fits (of ${data.considered})`);
+    if (step === 'plan_tool_calls') parts.push(data.calls.map((c) => `${c.id}(${Object.entries(c.arguments).map(([k, v]) => `${k}=${v}`).join(', ')})`).join(' · ') + (data.attempts > 1 ? ` (took ${data.attempts} attempts)` : ''));
+    if (step === 'run_tool') parts.push(`${data.rowCount} row(s)${data.truncated ? ', truncated' : ''} — values stay on the server`);
     if (step === 'search_documents') parts.push(`${data.count} passage(s)${data.sources?.length ? ' from ' + data.sources.join(', ') : ''}`);
+    if (step === 'write_answer' && data.mergeFields) parts.push(`${data.mergeFields} merge field(s) filled${data.unresolved ? `, ${data.unresolved} unavailable` : ''}`);
     return parts.join(' ');
   }
 
-  // Final answer: keep it as text nodes (no innerHTML), only turning **bold** into <strong>.
+  // Final answer: built from DOM nodes (no innerHTML). Handles **bold**, _note_ lines and markdown tables.
+  function inline(parent, text) {
+    text.split(/(\*\*[^*]+\*\*)/).forEach((part) => {
+      if (part.startsWith('**') && part.endsWith('**') && part.length > 4) parent.append(el('strong', '', part.slice(2, -2)));
+      else if (part) parent.append(document.createTextNode(part));
+    });
+  }
+  function cells(line) {
+    return line.trim().replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'));
+  }
   function renderAnswer(text) {
     answerEl.replaceChildren();
-    text.split(/(\*\*[^*]+\*\*)/).forEach((part) => {
-      if (part.startsWith('**') && part.endsWith('**') && part.length > 4) answerEl.append(el('strong', '', part.slice(2, -2)));
-      else answerEl.append(document.createTextNode(part));
-    });
+    const lines = text.split('\n');
+    for (let i = 0; i < lines.length; ) {
+      if (lines[i].trim().startsWith('|') && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1] || '')) {
+        const align = cells(lines[i + 1]).map((c) => (c.endsWith(':') ? 'num' : ''));
+        const table = el('table'), head = el('tr');
+        cells(lines[i]).forEach((c, j) => head.append(el('th', align[j], c)));
+        table.append(head);
+        i += 2;
+        while (i < lines.length && lines[i].trim().startsWith('|')) {
+          const tr = el('tr');
+          cells(lines[i]).forEach((c, j) => tr.append(el('td', align[j], c)));
+          table.append(tr);
+          i++;
+        }
+        answerEl.append(table);
+        continue;
+      }
+      const para = [];
+      while (i < lines.length && lines[i].trim() !== '' && !lines[i].trim().startsWith('|')) para.push(lines[i++]);
+      if (para.length) {
+        const joined = para.join('\n');
+        const p = el('p', /^_.*_$/.test(joined) ? 'note' : '');
+        inline(p, /^_.*_$/.test(joined) ? joined.slice(1, -1) : joined);
+        answerEl.append(p);
+      } else i++;
+    }
   }
 
   function onEvent(e) {
     switch (e.type) {
-      case 'step.started': stepRow(e.step, e.label); break;
+      case 'step.started': stepRow(e.key, e.label); break;
       case 'step.completed': {
-        const row = stepRow(e.step, e.label);
+        const row = stepRow(e.key, e.label);
         row.className = 'done';
         row.querySelector('.time').textContent = `${e.durationMs} ms`;
         const text = describe(e.step, e.data);
@@ -129,21 +167,22 @@
         break;
       }
       case 'step.failed': {
-        const row = stepRow(e.step, e.step);
+        const row = stepRow(e.key, e.key.replace(/_/g, ' '));
         row.className = 'failed';
         row.append(el('div', 'detail error', e.error));
         break;
       }
       case 'step.skipped': {
-        const row = stepRow(e.step, e.step.replace('_', ' '));
+        const row = stepRow(e.key, e.key.replace(/_/g, ' '));
         row.className = 'skipped';
         row.append(el('div', 'detail', `Skipped: ${e.reason}`));
         break;
       }
-      case 'answer.delta': answerEl.textContent += e.text; break;
+      case 'answer.delta': answerEl.classList.add('streaming'); answerEl.textContent += e.text; break;
       case 'run.completed':
+        answerEl.classList.remove('streaming');
         renderAnswer(e.answer);
-        for (const c of e.citations) citationsEl.append(el('li', '', `[${c.id}] ${c.source}`));
+        for (const c of e.citations) citationsEl.append(el('li', '', c.kind === 'data' ? `data: ${c.id} (${c.detail || 'no parameters'})` : `[${c.id}] ${c.source}`));
         break;
       case 'run.failed': answerEl.append(el('div', 'error', `Failed: ${e.error}`)); break;
     }

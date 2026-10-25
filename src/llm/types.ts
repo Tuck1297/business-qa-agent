@@ -20,15 +20,6 @@ export type DecisionAnswer =
     }
   | { type: 'refusal'; name: string | null };
 
-export interface StructuredRequest {
-  instructions: string;
-  input: string;
-  schemaName: string;
-  /** A strict-mode JSON Schema: every object has additionalProperties false and lists all properties as required. */
-  schema: Record<string, unknown>;
-  signal?: AbortSignal;
-}
-
 export interface TextStreamRequest {
   instructions: string;
   input: string;
@@ -36,11 +27,33 @@ export interface TextStreamRequest {
   signal?: AbortSignal;
 }
 
+export interface FunctionToolDef {
+  type: 'function';
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  strict: true;
+}
+
+export interface ToolCallRequest {
+  instructions: string;
+  input: string;
+  tools: FunctionToolDef[];
+  signal?: AbortSignal;
+}
+
+export interface FunctionCall {
+  callId: string;
+  name: string;
+  /** JSON-encoded arguments, exactly as the model sent them. */
+  arguments: string;
+}
+
 export interface LlmClient {
   /** OpenAI Decisions API: typed answers (probabilities and choices), no generated text. */
   decide(input: string, questions: DecisionQuestion[], signal?: AbortSignal): Promise<DecisionAnswer[]>;
-  /** Responses API with Structured Outputs. Returns the parsed JSON; callers validate it. */
-  structured(request: StructuredRequest): Promise<unknown>;
+  /** Responses API function calling: the model must call one or more of the given tools. Nothing is executed here. */
+  callTools(request: ToolCallRequest): Promise<FunctionCall[]>;
   /** Responses API with streaming. Calls onDelta for each text fragment and resolves with the full text. */
   streamText(request: TextStreamRequest): Promise<string>;
 }

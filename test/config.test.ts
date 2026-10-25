@@ -13,8 +13,18 @@ describe('config', () => {
     assert.equal(c.openai.decisionModel, 'gpt-6-luna');
     assert.equal(c.openai.model, 'gpt-6-astra');
     assert.equal(c.aiSearch, null);
+    assert.equal(c.database.toolsPath, 'tools.json');
     assert.equal(c.database.maxRows, 200);
+    assert.equal(c.database.maxToolCalls, 4);
     assert.equal(c.database.showSql, true);
+    assert.equal(c.routing.toolSelectThreshold, 0.5);
+    assert.deepEqual(c.format, { locale: 'en-US', currency: 'USD' });
+  });
+
+  it('validates the locale and currency used to format merge fields', () => {
+    assert.deepEqual(loadConfig({ ...minimal, LOCALE: 'de-DE', CURRENCY: 'eur' }).format, { locale: 'de-DE', currency: 'EUR' });
+    assert.throws(() => loadConfig({ ...minimal, CURRENCY: 'DOLLARS' }), /CURRENCY/);
+    assert.throws(() => loadConfig({ ...minimal, MAX_TOOL_CALLS: '20' }), /MAX_TOOL_CALLS must be a number from 1 to 8/);
   });
 
   it('refuses to listen on a network address without API_TOKEN', () => {

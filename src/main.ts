@@ -9,7 +9,7 @@ import { loadConfig } from './config.ts';
 import { OpenAiClient } from './llm/openai.ts';
 import { attachWebSocket, closeWebSocket } from './server/ws.ts';
 import { createHttpServer } from './server/http.ts';
-import { loadCatalog } from './tools/database/catalog.ts';
+import { loadTools } from './tools/database/definitions.ts';
 import { DatabaseService } from './tools/database/service.ts';
 import { AiSearchClient } from './tools/documents/aiSearch.ts';
 
@@ -17,13 +17,12 @@ async function main(): Promise<void> {
   const config = loadConfig();
 
   let database: DatabaseService | null = null;
-  if (await exists(config.database.catalogPath)) {
-    const catalog = await loadCatalog(config.database.catalogPath);
-    database = new DatabaseService(catalog, { timeoutMs: config.database.queryTimeoutMs });
-    const tableCount = catalog.sources.reduce((n, s) => n + s.tables.length, 0);
-    console.log(`[db] catalog loaded: ${catalog.sources.length} source(s), ${tableCount} table(s)/view(s)`);
+  if (await exists(config.database.toolsPath)) {
+    const tools = await loadTools(config.database.toolsPath);
+    database = new DatabaseService(tools, { timeoutMs: config.database.queryTimeoutMs, maxRows: config.database.maxRows });
+    console.log(`[db] ${tools.tools.length} tool(s) over ${tools.sources.length} source(s): ${tools.tools.map((t) => t.name).join(', ')}`);
   } else {
-    console.warn(`[db] no catalog at ${config.database.catalogPath}; database questions are off. Copy catalog.example.json to start.`);
+    console.warn(`[db] no tools file at ${config.database.toolsPath}; database questions are off. Copy tools.example.json to start.`);
   }
 
   const documents = config.aiSearch ? new AiSearchClient(config.aiSearch) : null;
@@ -35,11 +34,13 @@ async function main(): Promise<void> {
     documents,
     documentsDescription: process.env.DOCUMENTS_DESCRIPTION ?? 'company documents such as policies, procedures and contracts',
     timezone: config.timezone,
-    maxRows: config.database.maxRows,
+    locale: config.format.locale,
+    currency: config.format.currency,
     showSql: config.database.showSql,
+    maxToolCalls: config.database.maxToolCalls,
+    toolSelectThreshold: config.routing.toolSelectThreshold,
     predicateThreshold: config.routing.predicateThreshold,
     clarifyThreshold: config.routing.clarifyThreshold,
-    tableConfidenceWarning: config.routing.tableConfidenceWarning,
   });
 
   const server = createHttpServer({

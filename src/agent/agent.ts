@@ -2,19 +2,22 @@
  * The orchestrator. One question in, a stream of step events out:
  *
  *   route (Decisions API)
- *     ├─ database:  select_table (Decisions API) → build_query (Responses, structured) → run_query
- *     └─ documents: search_documents (Cloudflare AI Search)          ← runs in parallel
- *   write_answer (Responses, streamed token by token)
+ *     ├─ database:  select_tools (Decisions) → plan_tool_calls (function calling) → run_tool × N
+ *     └─ documents: search_documents (Cloudflare AI Search)                ← runs in parallel
+ *   write_answer (Responses, streamed) → merge fields filled in → answer.delta events
  *
+ * Database rows never go to the model provider: the answer is written as a template and
+ * the service fills in the values (src/merge) before any text reaches the client.
  * A failing tool doesn't fail the run: its step reports the error and the answer says what's missing.
  */
 
 import { randomUUID } from 'node:crypto';
-import { errorMessage, runStep, type Citation, type EventSink } from '../events.ts';
+import { errorMessage, runStep, type Citation, type DataResult, type EventSink } from '../events.ts';
 import type { LlmClient } from '../llm/types.ts';
+import { emptyReport, renderTemplate, StreamingMerger, tidy, truncationNote, type MergeOptions, type MergeReport, type MergeSource } from '../merge/merge.ts';
 import type { DocumentChunk, DocumentSearch } from '../tools/documents/aiSearch.ts';
 import type { DatabaseService } from '../tools/database/service.ts';
-import { runDatabaseTool, type DatabaseToolResult } from '../tools/database/tool.ts';
+import { runDatabaseTools, type DatabaseRouteResult } from '../tools/database/tool.ts';
 import { buildAnswerPrompt, usedCitations, type AnswerMode } from './answer.ts';
 import { routeQuestion, type RouteDecision } from './router.ts';
 
@@ -24,11 +27,13 @@ export interface AgentOptions {
   documents: DocumentSearch | null;
   documentsDescription: string;
   timezone: string;
-  maxRows: number;
+  locale: string;
+  currency: string;
   showSql: boolean;
+  maxToolCalls: number;
+  toolSelectThreshold: number;
   predicateThreshold: number;
   clarifyThreshold: number;
-  tableConfidenceWarning: number;
   /** Override "today" in tests. */
   now?: () => Date;
 }
@@ -36,7 +41,10 @@ export interface AgentOptions {
 export interface AgentResult {
   runId: string;
   answer: string;
+  answerTemplate: string | null;
   citations: Citation[];
+  data: DataResult[];
+  merge: MergeReport | null;
 }
 
 export const MAX_QUESTION_LENGTH = 2_000;
@@ -84,20 +92,20 @@ export class Agent {
 
       const notes: string[] = route.unavailable.map((tool) =>
         tool === 'database'
-          ? 'this question needs the business database, but no database is configured, so the answer may be incomplete.'
+          ? 'this question needs the business database, but no database tools are configured, so the answer may be incomplete.'
           : 'this question needs business documents, but document search is not configured, so the answer may be incomplete.',
       );
 
-      let database: DatabaseToolResult | null = null;
+      let database: DatabaseRouteResult | null = null;
       let documents: DocumentChunk[] | null = null;
 
       if (!route.clarify) {
-        if (!route.useDatabase) emit({ type: 'step.skipped', runId, step: 'select_table', reason: skipReason(route, 'database'), at: now() });
-        if (!route.useDocuments) emit({ type: 'step.skipped', runId, step: 'search_documents', reason: skipReason(route, 'documents'), at: now() });
+        if (!route.useDatabase) emit({ type: 'step.skipped', runId, step: 'select_tools', key: 'select_tools', reason: skipReason(route, 'database'), at: now() });
+        if (!route.useDocuments) emit({ type: 'step.skipped', runId, step: 'search_documents', key: 'search_documents', reason: skipReason(route, 'documents'), at: now() });
 
         const [dbOutcome, docOutcome] = await Promise.allSettled([
           route.useDatabase && o.database
-            ? runDatabaseTool({
+            ? runDatabaseTools({
                 llm: o.llm,
                 db: o.database,
                 emit,
@@ -105,9 +113,9 @@ export class Agent {
                 question,
                 today,
                 timezone: o.timezone,
-                maxRows: o.maxRows,
+                selectThreshold: o.toolSelectThreshold,
+                maxCalls: o.maxToolCalls,
                 showSql: o.showSql,
-                tableConfidenceWarning: o.tableConfidenceWarning,
                 ...(signal ? { signal } : {}),
               })
             : Promise.resolve(null),
@@ -127,8 +135,9 @@ export class Agent {
             : Promise.resolve(null),
         ]);
 
+        // Notes go to the model, so database failures are described without their error text.
         if (dbOutcome.status === 'fulfilled') database = dbOutcome.value;
-        else notes.push(`the database lookup failed (${errorMessage(dbOutcome.reason)}), so database figures are missing.`);
+        else notes.push('the database lookup failed, so database figures are missing.');
         if (docOutcome.status === 'fulfilled') documents = docOutcome.value;
         else notes.push(`the document search failed (${errorMessage(docOutcome.reason)}), so document information is missing.`);
       }
@@ -139,30 +148,83 @@ export class Agent {
           ? 'grounded'
           : 'general';
       const prompt = buildAnswerPrompt(mode, { question, today, database, documents, notes });
+      const sources = mergeSources(database);
+      const mergeOptions: MergeOptions = { locale: o.locale, currency: o.currency, timeZone: o.timezone };
+      const merger = new StreamingMerger(sources, mergeOptions);
 
-      const answer = await runStep(
+      const template = await runStep(
         emit,
         runId,
         'write_answer',
         mode === 'clarify' ? 'Asking a follow-up question' : 'Writing the answer',
-        () =>
-          o.llm.streamText({
+        async () => {
+          const text = await o.llm.streamText({
             instructions: prompt.instructions,
             input: prompt.input,
-            onDelta: (text) => emit({ type: 'answer.delta', runId, text }),
+            onDelta: (delta) => {
+              const merged = merger.push(delta);
+              if (merged) emit({ type: 'answer.delta', runId, text: merged });
+            },
             ...(signal ? { signal } : {}),
-          }),
-        (text) => ({ mode, characters: text.length }),
+          });
+          const rest = merger.end();
+          if (rest) emit({ type: 'answer.delta', runId, text: rest });
+          return text;
+        },
+        (text) => ({ mode, characters: text.length, mergeFields: merger.report.fields, unresolved: merger.report.unresolved.length }),
       );
 
-      const citations = usedCitations(answer, prompt.citations);
-      emit({ type: 'run.completed', runId, answer, citations, durationMs: Date.now() - started, at: now() });
-      return { runId, answer, citations };
+      // Re-render the complete template for the authoritative answer (tidier than the streamed pieces).
+      const report = emptyReport();
+      let answer = tidy(renderTemplate(template, sources, mergeOptions, report));
+      const note = truncationNote(report, sources);
+      if (note) {
+        answer = `${answer}\n\n${note}`;
+        emit({ type: 'answer.delta', runId, text: `\n\n${note}` });
+      }
+
+      const usesData = sources.length > 0;
+      const result: AgentResult = {
+        runId,
+        answer,
+        answerTemplate: usesData ? template : null,
+        citations: usedCitations(template, prompt.citations, report.usedCalls),
+        data: dataResults(database),
+        merge: usesData ? report : null,
+      };
+      emit({ type: 'run.completed', ...result, durationMs: Date.now() - started, at: now() });
+      return result;
     } catch (error) {
       emit({ type: 'run.failed', runId, error: errorMessage(error), durationMs: Date.now() - started, at: now() });
       throw error;
     }
   }
+}
+
+function mergeSources(database: DatabaseRouteResult | null): MergeSource[] {
+  return (database?.calls ?? []).map((call) => ({
+    id: call.id,
+    tool: call.tool.name,
+    fields: call.tool.output,
+    status: call.status,
+    rows: call.result?.rows ?? [],
+    truncated: call.result?.truncated ?? false,
+    rowLimit: call.result?.rowLimit ?? 0,
+  }));
+}
+
+function dataResults(database: DatabaseRouteResult | null): DataResult[] {
+  return (database?.calls ?? []).map((call) => ({
+    id: call.id,
+    tool: call.tool.name,
+    arguments: call.args,
+    status: call.status,
+    error: call.error,
+    fields: call.tool.output,
+    rows: call.result?.rows ?? [],
+    rowCount: call.result?.rows.length ?? 0,
+    truncated: call.result?.truncated ?? false,
+  }));
 }
 
 function summarizeRoute(r: RouteDecision): Record<string, unknown> {
@@ -179,16 +241,13 @@ function summarizeRoute(r: RouteDecision): Record<string, unknown> {
 }
 
 function skipReason(route: RouteDecision, tool: 'database' | 'documents'): string {
-  if (route.unavailable.includes(tool)) return `Needed, but ${tool === 'database' ? 'no database' : 'no document search'} is configured.`;
+  if (route.unavailable.includes(tool)) return `Needed, but ${tool === 'database' ? 'no database tools are' : 'no document search is'} configured.`;
   return `The question doesn't need the ${tool === 'database' ? 'database' : 'documents'}.`;
 }
 
 function describeDatabase(db: DatabaseService | null): string {
   if (!db) return 'not available';
-  return db.catalog.sources
-    .map((s) => `${s.description ?? s.name} (tables: ${s.tables.map((t) => t.name).join(', ')})`)
-    .join('; ')
-    .slice(0, 1_500);
+  return `tools that look up ${db.tools.tools.map((t) => `${t.name} (${t.description.trim()})`).join('; ')}`.slice(0, 1_500);
 }
 
 /** YYYY-MM-DD in the given IANA time zone. */

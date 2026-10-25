@@ -2,40 +2,49 @@
 
 Ask a question in plain language and get an answer drawn from your **business database** and your **business documents**, with every step streamed back as it happens.
 
-```
-"Which customers owe us the most, and what are our payment terms?"
+The database side runs **only SQL you write**, as named tools. **Query results never go to the AI model provider.** The model writes the answer with merge fields, and the service fills in the real values before anything is sent to the client.
 
-  ● Working out what the question needs     purpose: data_and_documents · database ✓ · documents ✓
-  ● Choosing a table or view                sales.v_invoices (confidence 0.88)
-  ● Searching business documents            1 passage from policies/billing-terms.pdf
-  ● Planning a query on sales.v_invoices    SELECT … WHERE "status" NOT IN ($1, $2) … LIMIT 4
-  ● Running the query on sales              3 rows, truncated
-  ● Writing the answer                      Lakeside Dental owes the most: $900.00 [T1] …
+```
+"Who owes us the most, how much is overdue, and what are our payment terms?"
+
+  ● Working out what the question needs   purpose: data_and_documents · database ✓ · documents ✓
+  ● Choosing database tools               top_unpaid_customers (0.92), overdue_invoices (0.71) of 6 tools
+  ● Searching business documents          1 passage from policies/billing-terms.pdf
+  ● Filling in tool parameters            top_unpaid_customers(limit=3) · overdue_invoices(as_of=2026-10-25)
+  ● Running top_unpaid_customers          3 rows — values stay on the server
+  ● Running overdue_invoices              2 rows — values stay on the server
+  ● Writing the answer                    5 merge fields filled
+
+  The model wrote:   **{{top_unpaid_customers.customer_name}}** owes the most: {{top_unpaid_customers.balance}}. …
+  The client gets:   **Zephyr Holdings** owes the most: $98,765.43. …
 ```
 
 ## How it works
 
 ```mermaid
 flowchart LR
-  Q[Question] --> R["route<br/>OpenAI Decisions API"]
-  R -->|needs data| T["select_table<br/>Decisions API"]
-  T --> P["build_query<br/>Responses API, structured"]
-  P --> X["run_query<br/>Postgres / SQL Server, read-only"]
+  Q[Question] --> R["route<br/>Decisions API"]
+  R -->|needs data| S["select_tools<br/>Decisions API, one predicate per tool"]
+  S --> P["plan_tool_calls<br/>function calling: tool + parameters"]
+  P --> X["run_tool × N<br/>your SQL, read-only"]
   R -->|needs documents| D["search_documents<br/>Cloudflare AI Search"]
   R -->|too vague| C[ask a follow-up]
-  X --> A["write_answer<br/>Responses API, streamed"]
-  D --> A
+  X -. rows stay here .-> M["merge fields filled<br/>by the service"]
+  D --> A["write_answer<br/>model writes a template"]
+  X -->|ids, arguments, field descriptions only| A
   C --> A
+  A --> M --> Out[Answer + data to the client]
 ```
 
-1. **Route.** One call to OpenAI's [Decisions API](https://developers.openai.com/api/docs/guides/decisions) (`gpt-6-luna`) answers four questions at once: the question's purpose (a choice), and whether it needs the database, needs documents, or is too ambiguous to answer (three probabilities).
-2. **Pick the table or view.** A second Decisions call chooses among the tables and views in your catalog, using the descriptions you wrote, with a "none of these" option.
-3. **Plan the query.** A Responses API call with Structured Outputs fills in a query plan whose JSON Schema only allows that table's columns and metrics. **The model never writes SQL.** The plan is validated (one retry with the exact problems if it's wrong) and compiled to parameterized SQL for Postgres or SQL Server.
-4. **Run it** read-only, with a timeout and a row cap.
+1. **Route.** One call to OpenAI's [Decisions API](https://developers.openai.com/api/docs/guides/decisions) (`gpt-6-luna`) answers four questions at once: the question's purpose, and whether it needs the database, needs documents, or is too vague.
+2. **Choose tools.** A second Decisions call asks, for every tool you defined, "would this tool return data the question needs?". Tools above the threshold (at most 8) go forward, so the model only ever sees a short, relevant list.
+3. **Fill in parameters.** A Responses API call with **function calling** picks which of those tools to call (possibly the same one twice, e.g. to compare periods) and fills in their parameters. The model sees each tool's name, description and parameters, **never its SQL**. Arguments are validated (types, required, enums, ranges, real dates), with one retry on mistakes.
+4. **Run your SQL** with the arguments bound as parameters, read-only, with a timeout and a row cap. Calls run in parallel.
 5. **Search documents** in [Cloudflare AI Search](https://developers.cloudflare.com/ai-search/) (formerly AutoRAG), in parallel with the database branch.
-6. **Write the answer** from the rows and passages, streamed token by token, with `[T1]` / `[D1]` citations.
+6. **Write the answer.** The model gets each call's id, the arguments it ran with, and the output fields' names and descriptions, **but not the rows**. It writes merge fields where values belong. Document passages are included as text and cited `[D1]`.
+7. **Merge.** The service fills in the merge fields as the answer streams, so the client never sees a raw `{{…}}`. The response also carries the rows themselves (`data`) and the unfilled template (`answerTemplate`).
 
-A failing tool doesn't fail the run: its step reports the error and the answer says what's missing. More detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); other tools worth adding are in [docs/TOOLS.md](docs/TOOLS.md).
+More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Other tools worth adding are in [docs/TOOLS.md](docs/TOOLS.md).
 
 ## Quick start
 
@@ -43,33 +52,65 @@ Requires **Node 22.18+** (it runs the TypeScript directly; there's no build step
 
 ```bash
 npm install
-cp .env.example .env            # add OPENAI_API_KEY, connection strings, Cloudflare settings
-cp catalog.example.json catalog.json   # then describe your own tables/views
-npm start                       # http://127.0.0.1:8787
+cp .env.example .env          # OPENAI_API_KEY, connection strings, Cloudflare settings
+cp tools.example.json tools.json   # then write your own tools
+npm run tools:check -- --run  # validate tools.json and run each tool's example (read-only)
+npm start                     # http://127.0.0.1:8787
 ```
 
 Open `http://127.0.0.1:8787` for a small page that streams the steps, or call the API directly (below).
 
-### Write the catalog
+## Defining tools
 
-The catalog is the agent's whole view of your database: only what's listed can be queried. It's also what makes answers accurate, since the models choose tables and columns from your descriptions.
+`tools.json` has your database connections (`sources`) and your `tools`. A tool is one parameterized SELECT with a name and description the agent chooses by:
 
-```bash
-# Draft one from information_schema, then fill in the TODOs:
-npm run catalog:draft -- --source sales --engine postgres --env SALES_DATABASE_URL --schema reporting > catalog.draft.json
+```json
+{
+  "name": "top_unpaid_customers",
+  "description": "Customers with the largest unpaid invoice balances. Use for who owes the most, accounts receivable or collections questions.",
+  "source": "sales",
+  "parameters": [
+    { "name": "limit", "type": "integer", "description": "How many customers to return.", "required": false, "default": 5, "minimum": 1, "maximum": 50 },
+    { "name": "region", "type": "string", "description": "Only this sales region.", "required": false, "enum": ["North", "South", "Metro"] }
+  ],
+  "sql": "SELECT customer_name, SUM(total_amount - amount_paid) AS balance, COUNT(*) AS open_invoices FROM reporting.v_invoices WHERE status NOT IN ('paid','void') AND (:region IS NULL OR region = :region) GROUP BY customer_name ORDER BY balance DESC LIMIT :limit",
+  "output": [
+    { "name": "customer_name", "description": "Customer's business name.", "label": "Customer" },
+    { "name": "balance", "description": "Unpaid balance across open invoices.", "format": "currency", "label": "Unpaid balance" },
+    { "name": "open_invoices", "description": "Invoices not fully paid.", "format": "integer" }
+  ],
+  "resultDescription": "One row per customer with an unpaid balance, largest balance first.",
+  "example": { "limit": 5, "region": null }
+}
 ```
 
-Tips:
+| Field | What it's for |
+|---|---|
+| `name` | snake_case. What the model calls, and the start of every merge field (`{{top_unpaid_customers.balance}}`). |
+| `description` | **The most important field.** Tool selection reads it, so say which questions the tool answers. |
+| `parameters` | `string`, `number`, `integer`, `boolean`, `date` or `datetime`, with optional `required: false`, `default`, `enum`, `minimum`, `maximum`, `maxLength`. Optional parameters arrive as `null` (or `default`), so write `(:region IS NULL OR region = :region)`. |
+| `sql` | One `SELECT` or `WITH … SELECT` using `:name` placeholders. Every placeholder must be declared and every declared parameter used. Put your `ORDER BY` here; the service only caps the row count. |
+| `output` | Every column the SQL returns that the answer may use (name them with `AS`). `format` is one of `text`, `number`, `integer`, `currency`, `percent` (a ratio: 0.125 → 12.5%), `date`, `month`, `datetime`, `boolean`. `label` is the table heading. |
+| `resultDescription` | What the rows are and **how they're ordered**. The model can only say "the largest" or "the latest" when this tells it the order. |
+| `maxRows` | Per-tool row cap (the global `MAX_ROWS` still applies). |
+| `example` | Arguments `npm run tools:check -- --run` uses to test the tool. |
 
-- **Point it at views, not raw tables.** A view per question area (`v_invoices`, `v_tickets`) hides joins, renames cryptic columns and leaves out sensitive ones. The agent queries one table or view per question.
-- **Describe what one row is** ("One row per invoice…"). This matters more than anything else for table selection.
-- **Add `metrics`** for business calculations that must always be computed the same way (revenue, outstanding balance). The model can only pick a metric by name; the SQL is yours.
-- **Add a few `sampleValues`** to text columns so filters match how data is stored ("partially_paid", not "partly paid"). Leave them off sensitive columns.
-- Use a **read-only database user** that can only `SELECT` the catalog's views.
+Placeholders become `($1::type)` on Postgres (the cast lets NULLs and reused parameters work) and `@p_name` on SQL Server. Values are always bound, never pasted into SQL. Use a **read-only database user** that can only `SELECT` the views your tools use.
 
-### Set up AI Search
+## Merge fields
 
-Create an AI Search instance in the Cloudflare dashboard over your R2 bucket (or website), then set `CF_ACCOUNT_ID`, `CF_API_TOKEN` (AI Search Run permission) and `CF_AI_SEARCH_INSTANCE`. The agent uses the retrieval-only `/search` endpoint and writes one combined answer itself.
+| Field | Fills in | Example |
+|---|---|---|
+| `{{call.field}}` | The field in the first row | `{{top_unpaid_customers.customer_name}}` |
+| `{{call[n].field}}` | The field in row *n* (from 1) | `{{top_unpaid_customers[2].balance}}` |
+| `{{table call}}` | Every row as a markdown table, using labels and formats | `{{table revenue_by_month}}` |
+| `{{count call}}` | Number of rows (`200+` when cut off) | `{{count overdue_invoices}}` |
+| `{{list call.field}}` | Every value, as "A, B, and C" | `{{list overdue_invoices.invoice_number}}` |
+| `{{sum\|avg\|min\|max call.field}}` | Computed over all rows | `{{sum revenue_by_month.revenue}}` |
+
+The call id is the tool name; a second call to the same tool is `tool_2`, then `tool_3`. Values are formatted with `LOCALE`, `CURRENCY` and `TIMEZONE`. Empty results fill in as `—` (or "No matching records" for tables). Failed calls and unknown references fill in as `[unavailable]` and are listed in `merge.unresolved`. When a result hit the row cap, a note is added to the answer.
+
+**What this trades away:** the model can't see the numbers, so it can't say "revenue grew 12%" or pick out an outlier on its own. Its instructions tell it to present values and let the reader compare. Where you want a computed fact, put it in the SQL (a `growth_pct` column, an `ORDER BY` plus `resultDescription`) or use `sum`/`avg`/`min`/`max`.
 
 ## API
 
@@ -79,25 +120,26 @@ All `/ask` routes need `Authorization: Bearer <API_TOKEN>` when `API_TOKEN` is s
 
 ```bash
 curl -s localhost:8787/ask -H "Authorization: Bearer $API_TOKEN" -H 'Content-Type: application/json' \
-  -d '{"question":"What was revenue by month this year?"}'
+  -d '{"question":"Who owes us the most?"}'
 ```
 
 ```json
-{ "runId": "…", "answer": "…", "citations": [{ "id": "T1", "kind": "table", "source": "sales.v_invoices", "detail": "…" }],
-  "events": [ { "type": "run.started" }, { "type": "step.started", "step": "route" }, "…" ] }
+{
+  "runId": "…",
+  "answer": "**Zephyr Holdings** owes the most: $98,765.43. …",
+  "answerTemplate": "**{{top_unpaid_customers.customer_name}}** owes the most: {{top_unpaid_customers.balance}}. …",
+  "citations": [{ "id": "top_unpaid_customers", "kind": "data", "source": "top_unpaid_customers", "detail": "limit = 3, region = not set" }],
+  "data": [{ "id": "top_unpaid_customers", "tool": "top_unpaid_customers", "arguments": { "limit": 3, "region": null },
+             "status": "ok", "error": null, "fields": ["…"], "rows": [{ "customer_name": "Zephyr Holdings", "balance": "98765.43", "open_invoices": "3" }],
+             "rowCount": 3, "truncated": false }],
+  "merge": { "fields": 5, "unresolved": [], "usedCalls": ["top_unpaid_customers"], "emptyCalls": [], "truncatedCalls": [] },
+  "events": ["…every step event…"]
+}
 ```
 
 ### `POST /ask/stream` — server-sent events
 
-Same request; the response is `text/event-stream` with one event per step as it happens, plus `answer.delta` for each piece of the answer.
-
-```
-event: step.completed
-data: {"type":"step.completed","step":"select_table","data":{"table":"sales.v_invoices","confidence":0.88,…},…}
-
-event: answer.delta
-data: {"type":"answer.delta","text":"Revenue in January was "}
-```
+Same request; the response is `text/event-stream` with one event per step as it happens, plus `answer.delta` events carrying answer text **with merge fields already filled in**. The final `run.completed` event has the same fields as `POST /ask` and its `answer` is authoritative (tidier spacing than the concatenated deltas).
 
 ### `GET /ws` — WebSocket
 
@@ -119,56 +161,68 @@ One question at a time per connection; open more connections for parallel questi
 | Event | When | Key fields |
 |---|---|---|
 | `run.started` | Question accepted | `runId`, `question` |
-| `step.started` | A step begins | `step`, `label` |
-| `step.completed` | A step finished | `step`, `durationMs`, `data` (step-specific: purpose and probabilities, chosen table and confidence, plan explanation and SQL, row count, document sources) |
+| `step.started` / `step.completed` | A step begins / ends | `step`, `key` (e.g. `run_tool:revenue_by_month`), `label`, `durationMs`, `data` |
 | `step.skipped` | A tool wasn't needed or isn't configured | `step`, `reason` |
-| `step.failed` | A step errored (the run may continue) | `step`, `error` |
-| `answer.delta` | A piece of the answer | `text` |
-| `run.completed` | Done | `answer`, `citations`, `durationMs` |
+| `step.failed` | A step errored (the run may continue) | `step`, `key`, `error` |
+| `answer.delta` | A piece of the answer, values filled in | `text` |
+| `run.completed` | Done | `answer`, `answerTemplate`, `citations`, `data`, `merge`, `durationMs` |
 | `run.failed` | The run couldn't finish | `error` |
 
-Steps: `route`, `select_table`, `build_query`, `run_query`, `search_documents`, `write_answer`. When a question is too vague, the tools are skipped and `write_answer` streams a follow-up question instead (its `data.mode` is `clarify`).
+Steps: `route`, `select_tools`, `plan_tool_calls`, `run_tool` (one per call), `search_documents`, `write_answer`. When a question is too vague, the tools are skipped and `write_answer` streams a follow-up question instead (its `data.mode` is `clarify`).
 
 ## Configuration
 
-Everything is an environment variable; see [.env.example](.env.example) for the full list with comments. The main ones:
+Everything is an environment variable; see [.env.example](.env.example) for the full list. The main ones:
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `OPENAI_API_KEY` | — | Required |
-| `OPENAI_DECISION_MODEL` | `gpt-6-luna` | Decisions API model (routing, table choice) |
-| `OPENAI_MODEL` | `gpt-6-astra` | Responses API model (query plan, answer) |
-| `CATALOG_PATH` | `catalog.json` | Tables/views the agent may use; database is off if the file is missing |
+| `OPENAI_DECISION_MODEL` | `gpt-6-luna` | Decisions API model (routing, tool selection) |
+| `OPENAI_MODEL` | `gpt-6-astra` | Responses API model (tool parameters, answer) |
+| `TOOLS_PATH` | `tools.json` | Your database tools; the database route is off if the file is missing |
+| `TOOL_SELECT_THRESHOLD` | `0.5` | Decisions probability needed to offer a tool to the model |
+| `MAX_TOOL_CALLS` | `4` | Most tool calls per question (1–8) |
 | `MAX_ROWS` / `QUERY_TIMEOUT_MS` | `200` / `10000` | Row cap and per-query timeout |
-| `SHOW_SQL` | `true` | Include SQL and parameters in step events |
+| `LOCALE` / `CURRENCY` / `TIMEZONE` | `en-US` / `USD` / `America/Chicago` | Merge-field formatting; `TIMEZONE` also resolves "this month" |
+| `SHOW_SQL` | `true` | Include each call's SQL and parameters in step events (to the client only) |
 | `CF_AI_SEARCH_INSTANCE` | — | Turns document search on |
 | `API_TOKEN` | — | Bearer token; required off loopback |
-| `TIMEZONE` | `America/Chicago` | Resolves "this month", "last quarter" |
+
+## What goes to the model provider
+
+| Sent to OpenAI | Never sent |
+|---|---|
+| The question, today's date | Database rows, or anything computed from them |
+| Tool names, descriptions and parameter definitions | Your SQL |
+| The arguments the model itself chose | Database error messages |
+| Output field names, formats and descriptions; `resultDescription` | Connection strings |
+| Document passages from AI Search (the document route needs them) | |
+
+An automated test runs a full question and checks that no row value appears in any request to the model, and the end-to-end check did the same against the running server. Responses API calls also send `store: false`.
 
 ## Security notes
 
-- **No model-written SQL.** Identifiers come only from the catalog and are quoted; every value is a bound parameter; the only statement produced is one `SELECT` with a row cap. Metric SQL is written by you.
-- **Read-only, twice.** Postgres queries run in `BEGIN READ ONLY` with a `statement_timeout` and are rolled back. For both engines, use a database user that can only read the catalog's views.
-- **Least data out.** Responses API calls send `store: false`. Rows sent to the model are capped (`MAX_ROWS`) and long cells are clipped. Set `SHOW_SQL=false` if clients shouldn't see SQL.
+- **Only your SQL runs.** The model chooses tools and parameter values; values are always bound parameters; each tool's SQL is checked to be one `SELECT` when `tools.json` loads.
+- **Read-only, twice.** Postgres queries run in `BEGIN READ ONLY` with a `statement_timeout` and are rolled back. For both engines, use a database user that can only read the views your tools use.
 - **Access.** Bearer token with a constant-time check; request bodies capped at 16 KB; questions at 2,000 characters.
-- The catalog limits *what can be queried*, not *who may see it*. If different users should see different rows, enforce it in the database (row-level security or per-user views), not in prompts.
+- **Merged values are inserted as plain text.** If a client renders the answer as HTML, escape it first (the demo page builds DOM text nodes).
+- Tools limit *what can be queried*, not *who may see it*. If different users should see different rows, enforce it in the database (row-level security or per-user views).
 
 ## Development
 
 ```bash
-npm test          # node:test, no network
-npm run typecheck # tsc --noEmit
-npm run dev       # restart on file changes
+npm test               # node:test, no network
+npm run typecheck      # tsc --noEmit
+npm run tools:check    # validate tools.json; add -- --run to execute the examples
+npm run dev            # restart on file changes
 ```
 
-Tests cover the catalog validator, the query-plan schema and validator, both SQL dialects, the OpenAI and AI Search clients (with mocked HTTP), routing, the full agent run (with a fake model), and the HTTP, SSE and WebSocket transports.
+Tests cover tool definitions, named-parameter binding for both engines, argument validation, merge fields and the streaming merger, the OpenAI and AI Search clients (mocked HTTP), routing, full agent runs including the no-data-to-the-model check, and the HTTP, SSE and WebSocket transports.
 
 ## Status and limits
 
-Built and tested on 2026-10-24.
+Updated 2026-10-25.
 
-- **Verified:** unit and transport tests; compiled Postgres SQL run against a real PostgreSQL 16 with sample data (correct totals, truncation, LIKE escaping, week buckets); the full server run end to end against mock OpenAI and Cloudflare endpoints; the demo page in a headless browser.
-- **Not yet verified live:** real OpenAI and Cloudflare calls (request shapes follow their October 2026 docs; the Decisions API is new, so check its current status and fields), the `pg` and `mssql` drivers themselves, and the SQL Server dialect on a real server.
-- **One table or view per question.** Questions that need joins work best through a view you define. Multi-table planning is a listed next step in [docs/TOOLS.md](docs/TOOLS.md).
+- **Verified:** 71 tests pass; the example tools' SQL run against a real PostgreSQL 16 with sample data (NULL optional parameters, `LIMIT :limit`, date arithmetic, an injection attempt returning no rows); the full server run end to end against mock OpenAI and Cloudflare endpoints with no row values in any provider request; the demo page in a headless browser.
+- **Not yet verified live:** real OpenAI and Cloudflare calls (request shapes follow their October 2026 docs; the Decisions API is new, so check its current status and fields), the `pg` and `mssql` drivers themselves, and the SQL Server tools on a real server.
 - **No conversation memory yet:** each question stands alone.
-- Third-party guides report a 255-choice limit per Decisions question, so table selection is capped at 254 tables/views per catalog (one choice is "none").
