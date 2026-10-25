@@ -145,41 +145,44 @@ describe('HTTP API', () => {
   });
 });
 
-describe('WebSocket /ws', () => {
-  function connect(): Promise<{
-    ws: WebSocket;
-    messages: Array<Record<string, unknown>>;
-    next: (type: string) => Promise<Record<string, unknown>>;
-    closed: Promise<number>;
-  }> {
-    const ws = new WebSocket(`${base.replace('http', 'ws')}/ws`);
-    const messages: Array<Record<string, unknown>> = [];
-    const waiters: Array<{ type: string; resolve: (m: Record<string, unknown>) => void }> = [];
-    ws.addEventListener('message', (event) => {
-      const message = JSON.parse(String(event.data)) as Record<string, unknown>;
-      messages.push(message);
-      const i = waiters.findIndex((w) => w.type === message.type);
-      if (i !== -1) {
-        (message as { _taken?: boolean })._taken = true;
-        waiters.splice(i, 1)[0]!.resolve(message);
+/** Open a WebSocket client with helpers to await messages by type. */
+function connect(): Promise<{
+  ws: WebSocket;
+  messages: Array<Record<string, unknown>>;
+  next: (type: string) => Promise<Record<string, unknown>>;
+  closed: Promise<number>;
+}> {
+  const ws = new WebSocket(`${base.replace('http', 'ws')}/ws`);
+  const messages: Array<Record<string, unknown>> = [];
+  // Messages already handed to a next() call, so each is returned once.
+  const taken = new WeakSet<object>();
+  const waiters: Array<{ type: string; resolve: (m: Record<string, unknown>) => void }> = [];
+  ws.addEventListener('message', (event) => {
+    const message = JSON.parse(String(event.data)) as Record<string, unknown>;
+    messages.push(message);
+    const i = waiters.findIndex((w) => w.type === message.type);
+    if (i !== -1) {
+      taken.add(message);
+      waiters.splice(i, 1)[0]!.resolve(message);
+    }
+  });
+  const closed = new Promise<number>((resolve) => ws.addEventListener('close', (e) => resolve(e.code)));
+  const next = (type: string) =>
+    new Promise<Record<string, unknown>>((resolve) => {
+      const seen = messages.find((m) => m.type === type && !taken.has(m));
+      if (seen) {
+        taken.add(seen);
+        return resolve(seen);
       }
+      waiters.push({ type, resolve });
     });
-    const closed = new Promise<number>((resolve) => ws.addEventListener('close', (e) => resolve(e.code)));
-    const next = (type: string) =>
-      new Promise<Record<string, unknown>>((resolve) => {
-        const seen = messages.find((m) => m.type === type && !(m as { _taken?: boolean })._taken);
-        if (seen) {
-          (seen as { _taken?: boolean })._taken = true;
-          return resolve(seen);
-        }
-        waiters.push({ type, resolve });
-      });
-    return new Promise((resolve, reject) => {
-      ws.addEventListener('open', () => resolve({ ws, messages, next, closed }));
-      ws.addEventListener('error', () => reject(new Error('ws error')));
-    });
-  }
+  return new Promise((resolve, reject) => {
+    ws.addEventListener('open', () => resolve({ ws, messages, next, closed }));
+    ws.addEventListener('error', () => reject(new Error('ws error')));
+  });
+}
 
+describe('WebSocket /ws', () => {
   it('authenticates, then streams every event tagged with the requestId', async () => {
     const c = await connect();
     c.ws.send(JSON.stringify({ type: 'auth', token: TOKEN }));

@@ -43,6 +43,8 @@ async function main(): Promise<void> {
       const prepared = db.prepare(tool, args);
       console.log(indent(prepared.sql));
       console.log(`  -- params: ${JSON.stringify(prepared.params.map((p) => p.value))}`);
+      // One tool at a time keeps the output readable and the database load low.
+      // oxlint-disable-next-line no-await-in-loop
       if (values.run) failures += await runExample(db, tool, args);
       console.log('');
     }

@@ -261,8 +261,11 @@ function dataResults(database: DatabaseRouteResult | null): DataResult[] {
   }));
 }
 
+function round(n: number): number {
+  return Math.round(n * 1000) / 1000;
+}
+
 function summarizeRoute(r: RouteDecision): Record<string, unknown> {
-  const round = (n: number) => Math.round(n * 1000) / 1000;
   return {
     purpose: r.purpose,
     purposeConfidence: round(r.purposeConfidence),
