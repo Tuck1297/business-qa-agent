@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Business Q&amp;A Agent</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e3e2dc;
+    --accent: #2f5bd3; --on-accent: #ffffff; --ok: #2e7d4f; --fail: #b3261e; --skip: #8a8a84; --code: #f1f0eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161615; --panel: #1f1f1d; --text: #ecebe6; --muted: #a3a29c; --line: #34332f;
+            --accent: #8aa8ff; --on-accent: #10131a; --ok: #6cc28f; --fail: #ff8a80; --skip: #8a8a84; --code: #2a2a27; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  form { display: grid; gap: 8px; }
+  textarea, input { width: 100%; font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  textarea { min-height: 72px; resize: vertical; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row input { flex: 1 1 220px; }
+  button { font: inherit; border: 0; border-radius: 8px; padding: 10px 16px; background: var(--accent); color: var(--on-accent); cursor: pointer; }
+  button.secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  button:disabled { opacity: .5; cursor: default; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-top: 16px; }
+  section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; }
+  ol.steps { list-style: none; margin: 0; padding: 0; }
+  ol.steps li { padding: 8px 0; border-top: 1px solid var(--line); }
+  ol.steps li:first-child { border-top: 0; }
+  .step-head { display: flex; gap: 8px; align-items: baseline; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; transform: translateY(1px); background: var(--accent); }
+  .running .dot { animation: pulse 1s infinite alternate; }
+  .done .dot { background: var(--ok); } .failed .dot { background: var(--fail); } .skipped .dot { background: var(--skip); }
+  @keyframes pulse { to { opacity: .3; } }
+  .time { margin-left: auto; color: var(--muted); font-size: 13px; white-space: nowrap; }
+  .detail { color: var(--muted); font-size: 13px; margin: 4px 0 0 18px; overflow-wrap: anywhere; }
+  pre { background: var(--code); border-radius: 6px; padding: 8px 10px; overflow-x: auto; font-size: 12.5px; margin: 6px 0 0 18px; }
+  #answer { white-space: pre-wrap; min-height: 1.5em; }
+  #citations { list-style: none; margin: 8px 0 0; padding-left: 0; color: var(--muted); font-size: 13px; }
+  .error { color: var(--fail); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Business Q&amp;A Agent</h1>
+  <p class="sub">Ask about your business data or documents. Every step streams in as it happens.</p>
+
+  <form id="ask">
+    <textarea id="question" placeholder="e.g. What was revenue by month this year, and what are our payment terms?" required maxlength="2000"></textarea>
+    <div class="row">
+      <input id="token" type="password" placeholder="API token (if the server has one)" autocomplete="off">
+      <button id="send" type="submit">Ask</button>
+      <button id="stop" type="button" class="secondary" disabled>Stop</button>
+    </div>
+  </form>
+
+  <section>
+    <h2>Steps</h2>
+    <ol class="steps" id="steps"><li class="detail">No question yet.</li></ol>
+  </section>
+
+  <section>
+    <h2>Answer</h2>
+    <div id="answer"></div>
+    <ol id="citations"></ol>
+  </section>
+</main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const stepsEl = $('steps'), answerEl = $('answer'), citationsEl = $('citations');
+  let controller = null;
+  const rows = new Map();
+
+  function el(tag, cls, text) {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  function stepRow(step, label) {
+    let row = rows.get(step);
+    if (!row) {
+      row = el('li', 'running');
+      const head = el('div', 'step-head');
+      head.append(el('span', 'dot'), el('span', 'label', label), el('span', 'time', ''));
+      row.append(head);
+      stepsEl.append(row);
+      rows.set(step, row);
+    }
+    return row;
+  }
+
+  function describe(step, data) {
+    const parts = [];
+    if (step === 'route') parts.push(`purpose: ${data.purpose} · database: ${data.useDatabase} · documents: ${data.useDocuments}${data.clarify ? ' · asking a follow-up' : ''}`);
+    if (step === 'select_table') parts.push(`table: ${data.table ?? 'none'} (confidence ${data.confidence})${data.uncertain ? ' — uncertain' : ''}`);
+    if (step === 'build_query') parts.push(data.explanation + (data.attempts > 1 ? ` (took ${data.attempts} attempts)` : ''));
+    if (step === 'run_query') parts.push(`${data.rowCount} row(s)${data.truncated ? ', truncated' : ''}`);
+    if (step === 'search_documents') parts.push(`${data.count} passage(s)${data.sources?.length ? ' from ' + data.sources.join(', ') : ''}`);
+    return parts.join(' ');
+  }
+
+  // Final answer: keep it as text nodes (no innerHTML), only turning **bold** into <strong>.
+  function renderAnswer(text) {
+    answerEl.replaceChildren();
+    text.split(/(\*\*[^*]+\*\*)/).forEach((part) => {
+      if (part.startsWith('**') && part.endsWith('**') && part.length > 4) answerEl.append(el('strong', '', part.slice(2, -2)));
+      else answerEl.append(document.createTextNode(part));
+    });
+  }
+
+  function onEvent(e) {
+    switch (e.type) {
+      case 'step.started': stepRow(e.step, e.label); break;
+      case 'step.completed': {
+        const row = stepRow(e.step, e.label);
+        row.className = 'done';
+        row.querySelector('.time').textContent = `${e.durationMs} ms`;
+        const text = describe(e.step, e.data);
+        if (text) row.append(el('div', 'detail', text));
+        if (e.data.sql) row.append(el('pre', '', e.data.sql + (e.data.params?.length ? `\n-- params: ${JSON.stringify(e.data.params)}` : '')));
+        break;
+      }
+      case 'step.failed': {
+        const row = stepRow(e.step, e.step);
+        row.className = 'failed';
+        row.append(el('div', 'detail error', e.error));
+        break;
+      }
+      case 'step.skipped': {
+        const row = stepRow(e.step, e.step.replace('_', ' '));
+        row.className = 'skipped';
+        row.append(el('div', 'detail', `Skipped: ${e.reason}`));
+        break;
+      }
+      case 'answer.delta': answerEl.textContent += e.text; break;
+      case 'run.completed':
+        renderAnswer(e.answer);
+        for (const c of e.citations) citationsEl.append(el('li', '', `[${c.id}] ${c.source}`));
+        break;
+      case 'run.failed': answerEl.append(el('div', 'error', `Failed: ${e.error}`)); break;
+    }
+  }
+
+  async function ask(question, token) {
+    controller = new AbortController();
+    const res = await fetch('/ask/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ question }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `HTTP ${res.status}`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let i;
+      while ((i = buffer.indexOf('\n\n')) !== -1) {
+        const block = buffer.slice(0, i);
+        buffer = buffer.slice(i + 2);
+        const data = block.split('\n').filter((l) => l.startsWith('data: ')).map((l) => l.slice(6)).join('\n');
+        if (data) onEvent(JSON.parse(data));
+      }
+    }
+  }
+
+  $('ask').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const question = $('question').value.trim();
+    if (!question) return;
+    rows.clear();
+    stepsEl.replaceChildren();
+    answerEl.textContent = '';
+    citationsEl.replaceChildren();
+    $('send').disabled = true;
+    $('stop').disabled = false;
+    try {
+      await ask(question, $('token').value.trim());
+    } catch (error) {
+      if (error.name !== 'AbortError') answerEl.append(el('div', 'error', error.message));
+    } finally {
+      $('send').disabled = false;
+      $('stop').disabled = true;
+      controller = null;
+    }
+  });
+  $('stop').addEventListener('click', () => controller?.abort());
+})();
+</script>
+</body>
+</html>
