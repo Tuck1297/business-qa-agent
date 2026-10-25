@@ -4,9 +4,6 @@
   "private": true,
   "description": "Ask a question in plain language; an AI agent routes it with OpenAI's Decisions API, runs the database tools you define (your SQL; rows never go to the model, values are merged into the answer) and searches Cloudflare AI Search (AutoRAG) documents, streaming every step.",
   "type": "module",
-  "engines": {
-    "node": ">=22.18.0"
-  },
   "scripts": {
     "start": "node --env-file-if-exists=.env src/main.ts",
     "dev": "node --env-file-if-exists=.env --watch src/main.ts",
@@ -33,5 +30,8 @@
     "oxlint": "^1.89.0",
     "oxlint-tsgolint": "^7.0.0",
     "typescript": "^7.0.0"
+  },
+  "engines": {
+    "node": ">=22.18.0"
   }
 }
