@@ -32,7 +32,7 @@ export interface RouteDecision {
 export interface RouterOptions {
   databaseAvailable: boolean;
   documentsAvailable: boolean;
-  /** Short description of what's in the database (from the catalog). */
+  /** Short description of what the database tools cover (from tools.json). */
   databaseDescription: string;
   /** Short description of what's in the document library (DOCUMENTS_DESCRIPTION). */
   documentsDescription: string;

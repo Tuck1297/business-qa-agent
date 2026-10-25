@@ -3,10 +3,10 @@
  *
  * Every query runs inside `BEGIN READ ONLY` with a per-query statement_timeout and is
  * rolled back afterwards. Still connect with a database user that only has SELECT on
- * the catalog's tables and views: the read-only transaction is a second lock, not the first.
+ * the views your tools use: the read-only transaction is a second lock, not the first.
  */
 
-import type { FilterValue } from '../spec.ts';
+import type { BoundParam } from '../sql.ts';
 import type { DbAdapter, QueryOptions } from './types.ts';
 
 // The parts of `pg` this adapter uses. Declared locally so the core doesn't depend on @types/pg.
@@ -21,7 +21,11 @@ interface PgPool {
 }
 interface PgModule {
   Pool: new (config: { connectionString: string; max?: number; application_name?: string }) => PgPool;
+  types?: { setTypeParser(oid: number, parser: (value: string) => unknown): void };
 }
+
+/** Postgres DATE type id. */
+const DATE_OID = 1082;
 
 export async function createPostgresAdapter(connectionString: string): Promise<DbAdapter> {
   let mod: PgModule;
@@ -31,19 +35,22 @@ export async function createPostgresAdapter(connectionString: string): Promise<D
   } catch (error) {
     throw new Error(`The "pg" package isn't installed. Run npm install. (${String(error)})`);
   }
+  // Return DATE columns as "YYYY-MM-DD" text. By default pg turns them into JS Dates at the
+  // server's local midnight, which can shift the day once converted to UTC.
+  mod.types?.setTypeParser(DATE_OID, (value) => value);
   const pool = new mod.Pool({ connectionString, max: 4, application_name: 'business-qa-agent' });
   // An idle client error must not crash the process.
   pool.on('error', (error) => console.error('[postgres] idle client error:', error.message));
 
   return {
-    async query(sql: string, params: FilterValue[], options: QueryOptions) {
+    async query(sql: string, params: BoundParam[], options: QueryOptions) {
       const client = await pool.connect();
       let broken = false;
       try {
         await client.query('BEGIN READ ONLY');
         // SET LOCAL can't take a bind parameter; the value is a validated integer.
         await client.query(`SET LOCAL statement_timeout = ${Math.trunc(options.timeoutMs)}`);
-        const result = await client.query(sql, params);
+        const result = await client.query(sql, params.map((p) => p.value));
         return result.rows;
       } catch (error) {
         broken = isConnectionError(error);

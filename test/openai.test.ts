@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { extractOutputText, OpenAiClient, parseDecisionAnswers } from '../src/llm/openai.ts';
+import { extractFunctionCalls, OpenAiClient, parseDecisionAnswers } from '../src/llm/openai.ts';
 import { ModelRefusalError } from '../src/llm/types.ts';
 import { streamingResponse } from './helpers.ts';
 
@@ -63,27 +63,43 @@ describe('Decisions API', () => {
   });
 });
 
-describe('Responses API — structured', () => {
-  it('sends a strict json_schema format with store:false and parses the JSON text', async () => {
+describe('Responses API — function calling', () => {
+  const tool = { type: 'function' as const, name: 'revenue_by_month', description: 'Revenue per month.', parameters: { type: 'object' }, strict: true as const };
+
+  it('sends the tools with tool_choice required and store:false, and returns the calls', async () => {
     const { c, calls } = client(() =>
-      json({ status: 'completed', output: [{ type: 'reasoning' }, { type: 'message', content: [{ type: 'output_text', text: '{"a":1}' }] }] }),
+      json({
+        status: 'completed',
+        output: [
+          { type: 'reasoning', summary: [] },
+          { type: 'function_call', id: 'fc_1', call_id: 'call_a', name: 'revenue_by_month', arguments: '{"start_date":"2026-01-01"}' },
+          { type: 'function_call', id: 'fc_2', call_id: 'call_b', name: 'revenue_by_month', arguments: '{"start_date":"2025-01-01"}' },
+        ],
+      }),
     );
-    const result = await c.structured({ instructions: 'sys', input: 'q', schemaName: 'plan', schema: { type: 'object' } });
-    assert.deepEqual(result, { a: 1 });
+    const result = await c.callTools({ instructions: 'sys', input: 'q', tools: [tool] });
+    assert.deepEqual(result, [
+      { callId: 'call_a', name: 'revenue_by_month', arguments: '{"start_date":"2026-01-01"}' },
+      { callId: 'call_b', name: 'revenue_by_month', arguments: '{"start_date":"2025-01-01"}' },
+    ]);
     const sent = JSON.parse(String(calls[0]!.init.body));
     assert.equal(calls[0]!.url, 'https://api.example.test/v1/responses');
+    assert.equal(sent.model, 'gpt-6-astra');
     assert.equal(sent.store, false);
-    assert.deepEqual(sent.text.format, { type: 'json_schema', name: 'plan', schema: { type: 'object' }, strict: true });
+    assert.equal(sent.tool_choice, 'required');
+    assert.equal(sent.parallel_tool_calls, true);
+    assert.deepEqual(sent.tools, [tool]);
   });
 
   it('raises refusals, cut-offs and failures', () => {
     assert.throws(
-      () => extractOutputText({ output: [{ type: 'message', content: [{ type: 'refusal', refusal: 'No.' }] }] }),
+      () => extractFunctionCalls({ output: [{ type: 'message', content: [{ type: 'refusal', refusal: 'No.' }] }] }),
       (e: Error) => e instanceof ModelRefusalError && e.message === 'No.',
     );
-    assert.throws(() => extractOutputText({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' } }), /cut off \(max_output_tokens\)/);
-    assert.throws(() => extractOutputText({ status: 'failed', error: { message: 'boom' } }), /boom/);
-    assert.throws(() => extractOutputText({ output: [] }), /no output text/);
+    assert.throws(() => extractFunctionCalls({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' } }), /cut off \(max_output_tokens\)/);
+    assert.throws(() => extractFunctionCalls({ status: 'failed', error: { message: 'boom' } }), /boom/);
+    assert.throws(() => extractFunctionCalls({}), /no output array/);
+    assert.deepEqual(extractFunctionCalls({ output: [] }), []);
   });
 });
 

@@ -1,8 +1,8 @@
 /**
  * Minimal OpenAI client over fetch (no SDK dependency).
  *
- * - Decisions API  (POST /v1/decisions)  — routing and table selection.
- * - Responses API  (POST /v1/responses)  — structured query building and streamed answers.
+ * - Decisions API  (POST /v1/decisions)  — routing and tool selection.
+ * - Responses API  (POST /v1/responses)  — function calling (tool arguments) and streamed answers.
  *
  * Responses calls send `store: false` so prompts containing business data aren't kept
  * as stored responses on OpenAI's side. The Decisions API doesn't accept `store`.
@@ -12,9 +12,10 @@ import {
   ModelRefusalError,
   type DecisionAnswer,
   type DecisionQuestion,
+  type FunctionCall,
   type LlmClient,
-  type StructuredRequest,
   type TextStreamRequest,
+  type ToolCallRequest,
 } from './types.ts';
 
 export interface OpenAiOptions {
@@ -40,7 +41,7 @@ export class OpenAiClient implements LlmClient {
     return parseDecisionAnswers(body);
   }
 
-  async structured(request: StructuredRequest): Promise<unknown> {
+  async callTools(request: ToolCallRequest): Promise<FunctionCall[]> {
     const body = await this.postJson(
       '/responses',
       {
@@ -48,23 +49,13 @@ export class OpenAiClient implements LlmClient {
         instructions: request.instructions,
         input: request.input,
         store: false,
-        text: {
-          format: {
-            type: 'json_schema',
-            name: request.schemaName,
-            schema: request.schema,
-            strict: true,
-          },
-        },
+        tools: request.tools,
+        tool_choice: 'required',
+        parallel_tool_calls: true,
       },
       request.signal,
     );
-    const text = extractOutputText(body);
-    try {
-      return JSON.parse(text);
-    } catch {
-      throw new Error(`The model returned output that isn't valid JSON: ${text.slice(0, 200)}`);
-    }
+    return extractFunctionCalls(body);
   }
 
   async streamText(request: TextStreamRequest): Promise<string> {
@@ -169,8 +160,8 @@ export function parseDecisionAnswers(body: unknown): DecisionAnswer[] {
   });
 }
 
-/** Pull the text out of a non-streamed Responses API result, surfacing refusals and cut-offs. */
-export function extractOutputText(body: unknown): string {
+/** Function calls from a Responses API result (arguments stay JSON strings; callers validate them). */
+export function extractFunctionCalls(body: unknown): FunctionCall[] {
   const status = readPath(body, ['status']);
   if (status === 'incomplete') {
     const reason = readPath(body, ['incomplete_details', 'reason']);
@@ -182,25 +173,25 @@ export function extractOutputText(body: unknown): string {
   }
   const output = readPath(body, ['output']);
   if (!Array.isArray(output)) throw new Error('Responses API result has no output array.');
-  let text = '';
+  const calls: FunctionCall[] = [];
   for (const item of output) {
-    if (readPath(item, ['type']) !== 'message') continue;
-    const content = readPath(item, ['content']);
-    if (!Array.isArray(content)) continue;
-    for (const part of content) {
-      const partType = readPath(part, ['type']);
-      if (partType === 'refusal') {
-        const refusal = readPath(part, ['refusal']);
-        throw new ModelRefusalError(typeof refusal === 'string' ? refusal : 'The model refused.');
-      }
-      if (partType === 'output_text') {
-        const value = readPath(part, ['text']);
-        if (typeof value === 'string') text += value;
+    const type = readPath(item, ['type']);
+    if (type === 'function_call') {
+      const name = readPath(item, ['name']);
+      const args = readPath(item, ['arguments']);
+      const callId = readPath(item, ['call_id']) ?? readPath(item, ['id']);
+      if (typeof name !== 'string') continue;
+      calls.push({ name, arguments: typeof args === 'string' ? args : JSON.stringify(args ?? {}), callId: String(callId ?? `call_${calls.length + 1}`) });
+    } else if (type === 'message') {
+      const content = readPath(item, ['content']);
+      const refusal = Array.isArray(content) ? content.find((c) => readPath(c, ['type']) === 'refusal') : undefined;
+      if (refusal) {
+        const text = readPath(refusal, ['refusal']);
+        throw new ModelRefusalError(typeof text === 'string' ? text : 'The model refused.');
       }
     }
   }
-  if (!text) throw new Error('Responses API result contained no output text.');
-  return text;
+  return calls;
 }
 
 /** Parse a server-sent-events body into JSON payloads (ignores comments and [DONE]). */

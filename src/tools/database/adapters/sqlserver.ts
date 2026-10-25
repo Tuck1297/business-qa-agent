@@ -1,17 +1,18 @@
 /**
  * SQL Server / Azure SQL adapter using `mssql`.
  *
- * The compiler only ever emits a single SELECT, so the query itself can't write.
- * Connect with a login that is only in db_datareader (or has SELECT on the catalog's
- * views) so the database enforces read-only too.
+ * Tool SQL is checked to be a single SELECT when tools.json loads. Connect with a login
+ * that is only in db_datareader (or has SELECT on the views your tools use) so the
+ * database enforces read-only too.
  */
 
-import type { FilterValue } from '../spec.ts';
+import type { ParamType } from '../definitions.ts';
+import type { BoundParam } from '../sql.ts';
 import type { DbAdapter, QueryOptions } from './types.ts';
 
 // The parts of `mssql` this adapter uses, declared locally.
 interface MssqlRequest {
-  input(name: string, value: unknown): MssqlRequest;
+  input(name: string, typeOrValue: unknown, value?: unknown): MssqlRequest;
   query(sql: string): Promise<{ recordset?: Record<string, unknown>[] }>;
 }
 interface MssqlPool {
@@ -20,7 +21,14 @@ interface MssqlPool {
   close(): Promise<void>;
   on(event: 'error', listener: (error: Error) => void): unknown;
 }
+type MssqlTypeFactory = ((...args: number[]) => unknown) | undefined;
 interface MssqlModule {
+  NVarChar?: MssqlTypeFactory;
+  Float?: unknown;
+  BigInt?: unknown;
+  Bit?: unknown;
+  Date?: unknown;
+  DateTimeOffset?: unknown;
   ConnectionPool: {
     new (config: string | Record<string, unknown>): MssqlPool;
     parseConnectionString?: (connectionString: string) => Record<string, unknown>;
@@ -50,10 +58,15 @@ export async function createSqlServerAdapter(connectionString: string, requestTi
   ready.catch(() => undefined);
 
   return {
-    async query(sql: string, params: FilterValue[], _options: QueryOptions) {
+    async query(sql: string, params: BoundParam[], _options: QueryOptions) {
       await ready;
       const request = pool.request();
-      params.forEach((value, i) => request.input(`p${i + 1}`, value));
+      for (const p of params) {
+        const type = sqlType(mod, p.type);
+        const value = toDriverValue(p.value, p.type);
+        if (type === undefined) request.input(p.name, value);
+        else request.input(p.name, type, value);
+      }
       const result = await request.query(sql);
       return result.recordset ?? [];
     },
@@ -62,4 +75,29 @@ export async function createSqlServerAdapter(connectionString: string, requestTi
       await pool.close();
     },
   };
+}
+
+/** Declare parameter types explicitly so NULLs and dates bind correctly. */
+function sqlType(mod: MssqlModule, type: ParamType): unknown {
+  switch (type) {
+    case 'string':
+      return typeof mod.NVarChar === 'function' ? mod.NVarChar(4000) : undefined;
+    case 'number':
+      return mod.Float;
+    case 'integer':
+      return mod.BigInt;
+    case 'boolean':
+      return mod.Bit;
+    case 'date':
+      return mod.Date;
+    case 'datetime':
+      return mod.DateTimeOffset;
+  }
+}
+
+function toDriverValue(value: BoundParam['value'], type: ParamType): unknown {
+  if (value === null) return null;
+  // Date types bind from JS Dates; "YYYY-MM-DD" parses as UTC midnight, matching mssql's default useUTC.
+  if ((type === 'date' || type === 'datetime') && typeof value === 'string') return new Date(value);
+  return value;
 }

@@ -1,51 +1,66 @@
-/** Owns the catalog and one connection pool per source, created on first use. */
+/** Runs your tools: binds arguments, caps rows, one connection pool per source (created on first use). */
 
-import type { Catalog, CatalogSource } from './catalog.ts';
-import type { CompiledQuery } from './compile.ts';
+import type { DbTool, ToolSet, ToolSource } from './definitions.ts';
+import { normalizeSql, sourceOf } from './definitions.ts';
 import { createPostgresAdapter } from './adapters/postgres.ts';
 import { createSqlServerAdapter } from './adapters/sqlserver.ts';
 import type { DbAdapter } from './adapters/types.ts';
+import type { ArgValue } from './arguments.ts';
+import { bindSql, capRows } from './sql.ts';
 
 export interface QueryResult {
-  columns: string[];
   rows: Record<string, unknown>[];
-  /** True when the table had more rows than the plan's limit. */
+  /** True when the SQL returned more rows than the cap. */
   truncated: boolean;
+  rowLimit: number;
 }
 
-export type AdapterFactory = (source: CatalogSource, connectionString: string, timeoutMs: number) => Promise<DbAdapter>;
+export type AdapterFactory = (source: ToolSource, connectionString: string, timeoutMs: number) => Promise<DbAdapter>;
 
 export const defaultAdapterFactory: AdapterFactory = (source, connectionString, timeoutMs) =>
-  source.engine === 'postgres'
-    ? createPostgresAdapter(connectionString)
-    : createSqlServerAdapter(connectionString, timeoutMs);
+  source.engine === 'postgres' ? createPostgresAdapter(connectionString) : createSqlServerAdapter(connectionString, timeoutMs);
 
 export class DatabaseService {
-  readonly catalog: Catalog;
+  readonly tools: ToolSet;
   private readonly adapters = new Map<string, Promise<DbAdapter>>();
   private readonly env: Record<string, string | undefined>;
   private readonly factory: AdapterFactory;
   private readonly timeoutMs: number;
+  private readonly maxRows: number;
 
   constructor(
-    catalog: Catalog,
-    options: { timeoutMs: number; env?: Record<string, string | undefined>; factory?: AdapterFactory },
+    tools: ToolSet,
+    options: { timeoutMs: number; maxRows: number; env?: Record<string, string | undefined>; factory?: AdapterFactory },
   ) {
-    this.catalog = catalog;
+    this.tools = tools;
     this.timeoutMs = options.timeoutMs;
+    this.maxRows = options.maxRows;
     this.env = options.env ?? process.env;
     this.factory = options.factory ?? defaultAdapterFactory;
   }
 
-  async run(source: CatalogSource, query: CompiledQuery): Promise<QueryResult> {
-    const adapter = await this.adapter(source);
-    const rows = await adapter.query(query.sql, query.params, { timeoutMs: this.timeoutMs });
-    const truncated = rows.length > query.rowLimit;
+  /** The exact statement and parameters a call would run (for step events and debugging). */
+  prepare(tool: DbTool, args: Record<string, ArgValue>): { sql: string; params: Array<{ name: string; value: ArgValue }>; rowLimit: number } {
+    const source = sourceOf(this.tools, tool);
+    const types = Object.fromEntries(tool.parameters.map((p) => [p.name, p.type]));
+    const bound = bindSql(normalizeSql(tool.sql), source.engine, types, args);
+    const rowLimit = Math.min(tool.maxRows ?? this.maxRows, this.maxRows);
     return {
-      columns: query.columns,
-      rows: (truncated ? rows.slice(0, query.rowLimit) : rows).map(normalizeRow),
-      truncated,
+      sql: capRows(bound.text, source.engine, rowLimit),
+      params: bound.params.map((p) => ({ name: p.name, value: p.value })),
+      rowLimit,
     };
+  }
+
+  async run(tool: DbTool, args: Record<string, ArgValue>): Promise<QueryResult> {
+    const source = sourceOf(this.tools, tool);
+    const types = Object.fromEntries(tool.parameters.map((p) => [p.name, p.type]));
+    const bound = bindSql(normalizeSql(tool.sql), source.engine, types, args);
+    const rowLimit = Math.min(tool.maxRows ?? this.maxRows, this.maxRows);
+    const adapter = await this.adapter(source);
+    const rows = await adapter.query(capRows(bound.text, source.engine, rowLimit), bound.params, { timeoutMs: this.timeoutMs });
+    const truncated = rows.length > rowLimit;
+    return { rows: (truncated ? rows.slice(0, rowLimit) : rows).map(normalizeRow), truncated, rowLimit };
   }
 
   async close(): Promise<void> {
@@ -54,7 +69,7 @@ export class DatabaseService {
     await Promise.allSettled(adapters.map(async (a) => (await a).close()));
   }
 
-  private adapter(source: CatalogSource): Promise<DbAdapter> {
+  private adapter(source: ToolSource): Promise<DbAdapter> {
     let adapter = this.adapters.get(source.name);
     if (!adapter) {
       const connectionString = this.env[source.connectionEnv];

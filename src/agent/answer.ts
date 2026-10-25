@@ -1,23 +1,27 @@
 /**
- * Final step: write the answer from what the tools found, with citations.
+ * Final step: the prompt for writing the answer.
+ *
+ * Database results are NOT in the prompt. The model gets each call's id, the tool's
+ * description, the arguments it ran with, and the output fields' names and descriptions,
+ * and writes merge fields where values belong (see src/merge/merge.ts). Document passages
+ * from AI Search are included as text, as before.
  */
 
 import type { Citation } from '../events.ts';
 import type { DocumentChunk } from '../tools/documents/aiSearch.ts';
-import type { DatabaseToolResult } from '../tools/database/tool.ts';
+import type { DatabaseRouteResult, ToolCallResult } from '../tools/database/tool.ts';
 
 export type AnswerMode = 'grounded' | 'clarify' | 'general';
 
 export interface AnswerContext {
   question: string;
   today: string;
-  database: DatabaseToolResult | null;
+  database: DatabaseRouteResult | null;
   documents: DocumentChunk[] | null;
-  /** Things that went wrong or were unavailable, so the answer can say so. */
+  /** Things that went wrong or were unavailable, so the answer can say so. Never contains database values. */
   notes: string[];
 }
 
-const MAX_CELL = 300;
 const MAX_CONTEXT_CHARS = 60_000;
 
 export function buildAnswerPrompt(mode: AnswerMode, ctx: AnswerContext): { instructions: string; input: string; citations: Citation[] } {
@@ -47,58 +51,82 @@ export function buildAnswerPrompt(mode: AnswerMode, ctx: AnswerContext): { instr
 
   const citations: Citation[] = [];
   const sections: string[] = [];
+  const calls = ctx.database?.calls ?? [];
 
-  if (ctx.database?.status === 'answered' && ctx.database.result) {
-    const r = ctx.database.result;
-    citations.push({ id: 'T1', kind: 'table', source: ctx.database.table ?? 'database', detail: ctx.database.explanation });
-    const rows = r.rows.map((row) => JSON.stringify(Object.fromEntries(Object.entries(row).map(([k, v]) => [k, clip(v)]))));
-    sections.push(
-      [
-        `[T1] Database result from ${ctx.database.table}`,
-        `What the query returns: ${ctx.database.explanation}`,
-        `Columns: ${r.columns.join(', ')}`,
-        `Rows: ${r.rows.length}${r.truncated ? ' (the table had more rows than this; the list is partial)' : ''}`,
-        ...(rows.length ? rows : ['(no rows matched)']),
-      ].join('\n'),
-    );
-  } else if (ctx.database?.status === 'no_table') {
-    sections.push('Database: no table or view in the catalog holds the data for this question.');
+  if (calls.length > 0) {
+    sections.push(['DATABASE DATA (values hidden; refer to them with merge fields)', ...calls.map(describeCall)].join('\n\n'));
+    for (const call of calls) {
+      citations.push({ id: call.id, kind: 'data', source: call.tool.name, detail: formatArgs(call.args) });
+    }
+  } else if (ctx.database?.status === 'no_tool') {
+    sections.push('DATABASE: none of the defined database tools fits this question, so no database figures are available.');
   }
 
   if (ctx.documents) {
-    if (ctx.documents.length === 0) sections.push('Documents: the search found no matching passages.');
+    const docs = ctx.documents.length === 0 ? ['DOCUMENTS: the search found no matching passages.'] : ['DOCUMENT PASSAGES'];
     ctx.documents.forEach((chunk, i) => {
       const id = `D${i + 1}`;
       citations.push({ id, kind: 'document', source: chunk.source, detail: chunk.text.slice(0, 200) });
-      sections.push(`[${id}] Document: ${chunk.source}\n${chunk.text.trim()}`);
+      docs.push(`[${id}] ${chunk.source}\n${chunk.text.trim()}`);
     });
+    sections.push(docs.join('\n\n'));
   }
 
   let context = sections.join('\n\n---\n\n');
   if (context.length > MAX_CONTEXT_CHARS) context = `${context.slice(0, MAX_CONTEXT_CHARS)}\n…(context cut to fit)`;
 
-  const instructions = [
-    'You answer business questions using ONLY the context provided below the question: database results and document passages.',
+  const rules = [
+    'You answer business questions using ONLY the context below the question.',
     `Today is ${ctx.today}.`,
-    'Rules:',
-    '- Cite sources inline right after the claim they support: [T1] for the database result, [D1], [D2]… for documents.',
-    '- Report figures exactly as they appear. If you calculate something (a difference, a percentage), show the calculation.',
-    "- If the context doesn't contain the answer, say so plainly and say what data or document would answer it. Never guess.",
-    '- If the database result is partial, say the list is partial.',
-    '- Lead with the direct answer. Use a short markdown table for several rows of figures. Keep it concise.',
-    ...ctx.notes.map((n) => `- Tell the user: ${n}`),
-  ].join('\n');
+  ];
+  if (calls.length > 0) {
+    rules.push(
+      '',
+      "DATABASE VALUES ARE HIDDEN FROM YOU. The service fills them in after you write. Wherever a database value belongs, write a merge field instead:",
+      '- {{call.field}}        the field in the first row                e.g. {{top_customers.customer_name}}',
+      '- {{call[2].field}}     the field in row 2 (rows count from 1)',
+      '- {{table call}}        every row as a table (put it on its own line)',
+      '- {{count call}}        how many rows',
+      '- {{list call.field}}   every value of a field as a list',
+      '- {{sum call.field}}, {{avg call.field}}, {{min call.field}}, {{max call.field}}   computed over all rows',
+      'Rules for database values:',
+      '- Never write a database value yourself and never guess one. Use only the call ids and fields listed under DATABASE DATA.',
+      '- Write sentences that stay true whatever the values turn out to be. Only say which row is highest, first or latest when the rows description says how rows are ordered.',
+      "- Don't describe trends or compare values (\"grew\", \"more than\") because you can't see them. Present the values and let the reader compare.",
+      '- When a call can return several rows, prefer {{table call}} or {{list call.field}} over picking single rows.',
+      "- Results can be empty; the service then shows \"—\" or \"No matching records\", so don't promise that something exists.",
+      '- Values are already formatted (currency, dates); don\'t add symbols or units around them.',
+    );
+  }
+  if (ctx.documents && ctx.documents.length > 0) {
+    rules.push('', 'Cite document passages inline right after the claim they support: [D1], [D2]…');
+  }
+  rules.push(
+    '',
+    "If the context doesn't contain what's needed, say so plainly and say what data or document would answer it. Never guess.",
+    'Lead with the direct answer. Keep it concise. Use markdown.',
+    ...ctx.notes.map((n) => `Tell the user: ${n}`),
+  );
 
-  return { instructions, input: `Question: ${ctx.question}\n\nContext:\n\n${context || '(no context was found)'}`, citations };
+  return { instructions: rules.join('\n'), input: `Question: ${ctx.question}\n\nContext:\n\n${context || '(no context was found)'}`, citations };
 }
 
-/** Keep only the citations the answer actually used; fall back to all of them. */
-export function usedCitations(answer: string, citations: Citation[]): Citation[] {
-  const used = citations.filter((c) => answer.includes(`[${c.id}]`));
-  return used.length > 0 ? used : citations;
+function describeCall(call: ToolCallResult): string {
+  const header = `Call id: ${call.id}  (tool ${call.tool.name}: ${call.tool.description.trim()})`;
+  const args = `Ran with: ${formatArgs(call.args) || 'no parameters'}`;
+  if (call.status === 'failed') return `${header}\n${args}\nSTATUS: this data couldn't be retrieved. Don't use merge fields for "${call.id}"; tell the user it's unavailable.`;
+  const rows = `Rows: ${call.tool.resultDescription?.trim() || 'as returned by the tool (order not specified).'}`;
+  const fields = call.tool.output.map((f) => `- ${f.name} (${f.format ?? 'text'}): ${f.description.trim()}`);
+  return [header, args, rows, 'Fields:', ...fields].join('\n');
 }
 
-function clip(value: unknown): unknown {
-  if (typeof value === 'string' && value.length > MAX_CELL) return `${value.slice(0, MAX_CELL)}…`;
-  return value;
+function formatArgs(args: Record<string, unknown>): string {
+  return Object.entries(args)
+    .map(([k, v]) => `${k} = ${v === null ? 'not set' : String(v)}`)
+    .join(', ');
+}
+
+/** Citations the answer actually used: documents by [D#] in the text, data calls by merge fields. */
+export function usedCitations(template: string, citations: Citation[], usedCalls: string[]): Citation[] {
+  return citations.filter((c) => (c.kind === 'document' ? template.includes(`[${c.id}]`) : usedCalls.includes(c.id)));
 }

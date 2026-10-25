@@ -2,7 +2,7 @@ node_modules/
 .env
 .env.*
 !.env.example
-# Your real catalog describes your business schema; keep it out of git unless you mean to share it.
-catalog.json
+# Your real tools describe your business schema; keep them out of git unless you mean to share them.
+tools.json
 coverage/
 *.log

@@ -2,25 +2,25 @@
 
 import { readFileSync } from 'node:fs';
 import type { AgentEvent } from '../src/events.ts';
-import type { DecisionAnswer, DecisionQuestion, LlmClient, StructuredRequest, TextStreamRequest } from '../src/llm/types.ts';
-import { validateCatalog, type Catalog } from '../src/tools/database/catalog.ts';
+import type { DecisionAnswer, DecisionQuestion, FunctionCall, LlmClient, TextStreamRequest, ToolCallRequest } from '../src/llm/types.ts';
+import { validateTools, type ToolSet } from '../src/tools/database/definitions.ts';
 
-export function exampleCatalog(): Catalog {
-  const text = readFileSync(new URL('../catalog.example.json', import.meta.url), 'utf8');
-  return validateCatalog(JSON.parse(text));
+export function exampleTools(): ToolSet {
+  const text = readFileSync(new URL('../tools.example.json', import.meta.url), 'utf8');
+  return validateTools(JSON.parse(text));
 }
 
 export interface FakeLlmScript {
   decide?: (input: string, questions: DecisionQuestion[]) => DecisionAnswer[] | Promise<DecisionAnswer[]>;
-  structured?: (request: StructuredRequest, call: number) => unknown;
+  callTools?: (request: ToolCallRequest, call: number) => FunctionCall[] | Promise<FunctionCall[]>;
   stream?: (request: TextStreamRequest) => string[] | Promise<string[]>;
 }
 
-/** A scripted LlmClient that records every call. */
+/** A scripted LlmClient that records every request it receives. */
 export class FakeLlm implements LlmClient {
-  readonly calls: Array<{ kind: 'decide' | 'structured' | 'stream'; payload: unknown }> = [];
+  readonly calls: Array<{ kind: 'decide' | 'callTools' | 'stream'; payload: unknown }> = [];
   private readonly script: FakeLlmScript;
-  private structuredCount = 0;
+  private toolCallCount = 0;
 
   constructor(script: FakeLlmScript) {
     this.script = script;
@@ -32,29 +32,28 @@ export class FakeLlm implements LlmClient {
     return this.script.decide(input, questions);
   }
 
-  async structured(request: StructuredRequest): Promise<unknown> {
-    this.calls.push({ kind: 'structured', payload: request });
-    if (!this.script.structured) throw new Error('structured not scripted');
-    this.structuredCount += 1;
-    return this.script.structured(request, this.structuredCount);
+  async callTools(request: ToolCallRequest): Promise<FunctionCall[]> {
+    this.calls.push({ kind: 'callTools', payload: { instructions: request.instructions, input: request.input, tools: request.tools } });
+    if (!this.script.callTools) throw new Error('callTools not scripted');
+    this.toolCallCount += 1;
+    return this.script.callTools(request, this.toolCallCount);
   }
 
   async streamText(request: TextStreamRequest): Promise<string> {
-    this.calls.push({ kind: 'stream', payload: request });
+    this.calls.push({ kind: 'stream', payload: { instructions: request.instructions, input: request.input } });
     const parts = this.script.stream ? await this.script.stream(request) : ['ok'];
     for (const part of parts) request.onDelta(part);
     return parts.join('');
   }
+
+  /** Everything this fake was sent, as one string, for "did this value leak?" checks. */
+  everythingSent(): string {
+    return JSON.stringify(this.calls);
+  }
 }
 
 /** Route answers: which predicates fire and the purpose. */
-export function routeAnswers(opts: {
-  purpose: string;
-  db?: number;
-  docs?: number;
-  ambiguous?: number;
-  confidence?: number;
-}): DecisionAnswer[] {
+export function routeAnswers(opts: { purpose: string; db?: number; docs?: number; ambiguous?: number; confidence?: number }): DecisionAnswer[] {
   return [
     { type: 'choice', name: 'purpose', choice: opts.purpose, confidence: opts.confidence ?? 0.9, probabilities: [] },
     { type: 'predicate', name: 'needs_database', probability: opts.db ?? 0 },
@@ -63,25 +62,23 @@ export function routeAnswers(opts: {
   ];
 }
 
-export function tableChoice(table: string, confidence = 0.92): DecisionAnswer[] {
-  return [
-    {
-      type: 'choice',
-      name: 'table',
-      choice: table,
-      confidence,
-      probabilities: [
-        { value: table, probability: confidence },
-        { value: 'none', probability: 1 - confidence },
-      ],
-    },
-  ];
+/** Tool-selection answers: one predicate per tool question, using the given probabilities (others 0.02). */
+export function toolPredicates(questions: DecisionQuestion[], probabilities: Record<string, number>): DecisionAnswer[] {
+  return questions.map((q) => ({ type: 'predicate', name: q.name, probability: probabilities[q.name] ?? 0.02 }));
+}
+
+/** Decide handler that answers routing and tool selection. */
+export function decider(route: Parameters<typeof routeAnswers>[0], tools: Record<string, number>) {
+  return (_input: string, questions: DecisionQuestion[]) =>
+    questions[0]!.name === 'purpose' ? routeAnswers(route) : toolPredicates(questions, tools);
+}
+
+export function call(name: string, args: Record<string, unknown>, id = `call_${name}`): FunctionCall {
+  return { callId: id, name, arguments: JSON.stringify(args) };
 }
 
 export function eventTypes(events: AgentEvent[]): string[] {
-  return events
-    .filter((e) => e.type !== 'answer.delta')
-    .map((e) => ('step' in e ? `${e.type}:${e.step}` : e.type));
+  return events.filter((e) => e.type !== 'answer.delta').map((e) => ('key' in e ? `${e.type}:${e.key}` : e.type));
 }
 
 /** Build a Response whose body streams the given string pieces. */
