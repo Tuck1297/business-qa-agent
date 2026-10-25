@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { extractFunctionCalls, OpenAiClient, parseDecisionAnswers } from '../src/llm/openai.ts';
 import { ModelRefusalError } from '../src/llm/types.ts';
-import { streamingResponse } from './helpers.ts';
+import { streamingResponse, jsonBody, urlOf } from './helpers.ts';
 
 type Captured = { url: string; init: RequestInit };
 
@@ -15,7 +15,7 @@ function client(respond: (captured: Captured) => Response | Promise<Response>) {
     model: 'gpt-6-astra',
     timeoutMs: 5_000,
     fetch: async (url, init) => {
-      const captured = { url: String(url), init: init ?? {} };
+      const captured = { url: urlOf(url), init: init ?? {} };
       calls.push(captured);
       return respond(captured);
     },
@@ -23,7 +23,8 @@ function client(respond: (captured: Captured) => Response | Promise<Response>) {
   return { c, calls };
 }
 
-const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
 describe('Decisions API', () => {
   it('posts model, input and questions to /decisions and parses typed answers', async () => {
@@ -31,15 +32,23 @@ describe('Decisions API', () => {
       json({
         model: 'gpt-6-luna',
         answers: [
-          { type: 'choice', name: 'purpose', choice: 'business_data', probabilities: [{ value: 'business_data', probability: 0.8 }], confidence: 0.8 },
+          {
+            type: 'choice',
+            name: 'purpose',
+            choice: 'business_data',
+            probabilities: [{ value: 'business_data', probability: 0.8 }],
+            confidence: 0.8,
+          },
           { type: 'predicate', name: 'needs_database', probability: 0.93 },
           { type: 'refusal', name: 'is_ambiguous' },
         ],
       }),
     );
-    const answers = await c.decide('How much did we invoice?', [{ type: 'predicate', name: 'needs_database', instructions: 'x' }]);
+    const answers = await c.decide('How much did we invoice?', [
+      { type: 'predicate', name: 'needs_database', instructions: 'x' },
+    ]);
     assert.equal(calls[0]!.url, 'https://api.example.test/v1/decisions');
-    const sent = JSON.parse(String(calls[0]!.init.body));
+    const sent = jsonBody(calls[0]!.init);
     assert.equal(sent.model, 'gpt-6-luna');
     assert.equal(sent.input, 'How much did we invoice?');
     assert.equal(sent.questions.length, 1);
@@ -64,7 +73,13 @@ describe('Decisions API', () => {
 });
 
 describe('Responses API — function calling', () => {
-  const tool = { type: 'function' as const, name: 'revenue_by_month', description: 'Revenue per month.', parameters: { type: 'object' }, strict: true as const };
+  const tool = {
+    type: 'function' as const,
+    name: 'revenue_by_month',
+    description: 'Revenue per month.',
+    parameters: { type: 'object' },
+    strict: true as const,
+  };
 
   it('sends the tools with tool_choice required and store:false, and returns the calls', async () => {
     const { c, calls } = client(() =>
@@ -72,8 +87,20 @@ describe('Responses API — function calling', () => {
         status: 'completed',
         output: [
           { type: 'reasoning', summary: [] },
-          { type: 'function_call', id: 'fc_1', call_id: 'call_a', name: 'revenue_by_month', arguments: '{"start_date":"2026-01-01"}' },
-          { type: 'function_call', id: 'fc_2', call_id: 'call_b', name: 'revenue_by_month', arguments: '{"start_date":"2025-01-01"}' },
+          {
+            type: 'function_call',
+            id: 'fc_1',
+            call_id: 'call_a',
+            name: 'revenue_by_month',
+            arguments: '{"start_date":"2026-01-01"}',
+          },
+          {
+            type: 'function_call',
+            id: 'fc_2',
+            call_id: 'call_b',
+            name: 'revenue_by_month',
+            arguments: '{"start_date":"2025-01-01"}',
+          },
         ],
       }),
     );
@@ -82,7 +109,7 @@ describe('Responses API — function calling', () => {
       { callId: 'call_a', name: 'revenue_by_month', arguments: '{"start_date":"2026-01-01"}' },
       { callId: 'call_b', name: 'revenue_by_month', arguments: '{"start_date":"2025-01-01"}' },
     ]);
-    const sent = JSON.parse(String(calls[0]!.init.body));
+    const sent = jsonBody(calls[0]!.init);
     assert.equal(calls[0]!.url, 'https://api.example.test/v1/responses');
     assert.equal(sent.model, 'gpt-6-astra');
     assert.equal(sent.store, false);
@@ -96,12 +123,20 @@ describe('Responses API — function calling', () => {
       () => extractFunctionCalls({ output: [{ type: 'message', content: [{ type: 'refusal', refusal: 'No.' }] }] }),
       (e: Error) => e instanceof ModelRefusalError && e.message === 'No.',
     );
-    assert.throws(() => extractFunctionCalls({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' } }), /cut off \(max_output_tokens\)/);
+    assert.throws(
+      () => extractFunctionCalls({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' } }),
+      /cut off \(max_output_tokens\)/,
+    );
     assert.throws(() => extractFunctionCalls({ status: 'failed', error: { message: 'boom' } }), /boom/);
     assert.throws(() => extractFunctionCalls({}), /no output array/);
     assert.deepEqual(extractFunctionCalls({ output: [] }), []);
   });
 });
+
+/** A streamed response carrying the given events as SSE data lines. */
+function sse(...events: object[]): Response {
+  return streamingResponse([events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('')]);
+}
 
 describe('Responses API — streaming', () => {
   it('emits text deltas as they arrive, even when SSE events split across network chunks', async () => {
@@ -118,24 +153,40 @@ describe('Responses API — streaming', () => {
     const text = await c.streamText({ instructions: 'sys', input: 'q', onDelta: (d) => deltas.push(d) });
     assert.equal(text, 'Revenue was $12,400 [T1].');
     assert.deepEqual(deltas, ['Revenue ', 'was $12,400 [T1].']);
-    const sent = JSON.parse(String(calls[0]!.init.body));
+    const sent = jsonBody(calls[0]!.init);
     assert.equal(sent.stream, true);
     assert.equal(sent.store, false);
   });
 
   it('fails on error events, failed responses, refusals and early stream end', async () => {
-    const sse = (...events: object[]) => streamingResponse([events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('')]);
-    await assert.rejects(client(() => sse({ type: 'error', message: 'rate limited' })).c.streamText({ instructions: '', input: '', onDelta() {} }), /rate limited/);
     await assert.rejects(
-      client(() => sse({ type: 'response.failed', response: { error: { message: 'server error' } } })).c.streamText({ instructions: '', input: '', onDelta() {} }),
+      client(() => sse({ type: 'error', message: 'rate limited' })).c.streamText({
+        instructions: '',
+        input: '',
+        onDelta() {},
+      }),
+      /rate limited/,
+    );
+    await assert.rejects(
+      client(() => sse({ type: 'response.failed', response: { error: { message: 'server error' } } })).c.streamText({
+        instructions: '',
+        input: '',
+        onDelta() {},
+      }),
       /server error/,
     );
     await assert.rejects(
-      client(() => sse({ type: 'response.refusal.delta', delta: 'I can\'t help.' }, { type: 'response.completed' })).c.streamText({ instructions: '', input: '', onDelta() {} }),
+      client(() =>
+        sse({ type: 'response.refusal.delta', delta: "I can't help." }, { type: 'response.completed' }),
+      ).c.streamText({ instructions: '', input: '', onDelta() {} }),
       ModelRefusalError,
     );
     await assert.rejects(
-      client(() => sse({ type: 'response.output_text.delta', delta: 'half' })).c.streamText({ instructions: '', input: '', onDelta() {} }),
+      client(() => sse({ type: 'response.output_text.delta', delta: 'half' })).c.streamText({
+        instructions: '',
+        input: '',
+        onDelta() {},
+      }),
       /ended before the response completed/,
     );
   });

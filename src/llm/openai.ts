@@ -17,6 +17,7 @@ import {
   type TextStreamRequest,
   type ToolCallRequest,
 } from './types.ts';
+import { toText } from '../text.ts';
 
 export interface OpenAiOptions {
   apiKey: string;
@@ -151,12 +152,15 @@ export function parseDecisionAnswers(body: unknown): DecisionAnswer[] {
         confidence: typeof confidence === 'number' ? confidence : 0,
         probabilities: Array.isArray(probabilities)
           ? probabilities
-              .map((p) => ({ value: String(readPath(p, ['value'])), probability: Number(readPath(p, ['probability'])) }))
+              .map((p) => ({
+                value: toText(readPath(p, ['value'])),
+                probability: Number(readPath(p, ['probability'])),
+              }))
               .filter((p) => Number.isFinite(p.probability))
           : [],
       };
     }
-    throw new Error(`Unsupported Decisions answer type "${String(type)}" for "${name}".`);
+    throw new Error(`Unsupported Decisions answer type "${toText(type)}" for "${name}".`);
   });
 }
 
@@ -181,7 +185,11 @@ export function extractFunctionCalls(body: unknown): FunctionCall[] {
       const args = readPath(item, ['arguments']);
       const callId = readPath(item, ['call_id']) ?? readPath(item, ['id']);
       if (typeof name !== 'string') continue;
-      calls.push({ name, arguments: typeof args === 'string' ? args : JSON.stringify(args ?? {}), callId: String(callId ?? `call_${calls.length + 1}`) });
+      calls.push({
+        name,
+        arguments: typeof args === 'string' ? args : JSON.stringify(args ?? {}),
+        callId: callId === undefined ? `call_${calls.length + 1}` : toText(callId),
+      });
     } else if (type === 'message') {
       const content = readPath(item, ['content']);
       const refusal = Array.isArray(content) ? content.find((c) => readPath(c, ['type']) === 'refusal') : undefined;
@@ -195,14 +203,14 @@ export function extractFunctionCalls(body: unknown): FunctionCall[] {
 }
 
 /** Parse a server-sent-events body into JSON payloads (ignores comments and [DONE]). */
-export async function* readServerSentEvents(
-  body: ReadableStream<Uint8Array>,
-): AsyncGenerator<Record<string, unknown>> {
+export async function* readServerSentEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<Record<string, unknown>> {
   const decoder = new TextDecoder();
   let buffer = '';
   const reader = body.getReader();
   try {
     while (true) {
+      // Stream chunks arrive one after another; reading them in order is the point.
+      // oxlint-disable-next-line no-await-in-loop
       const { value, done } = await reader.read();
       if (value) buffer += decoder.decode(value, { stream: true });
       if (done) buffer += decoder.decode();

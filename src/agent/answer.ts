@@ -10,6 +10,7 @@
 import type { Citation } from '../events.ts';
 import type { DocumentChunk } from '../tools/documents/aiSearch.ts';
 import type { DatabaseRouteResult, ToolCallResult } from '../tools/database/tool.ts';
+import { toText } from '../text.ts';
 
 export type AnswerMode = 'grounded' | 'clarify' | 'general';
 
@@ -24,7 +25,10 @@ export interface AnswerContext {
 
 const MAX_CONTEXT_CHARS = 60_000;
 
-export function buildAnswerPrompt(mode: AnswerMode, ctx: AnswerContext): { instructions: string; input: string; citations: Citation[] } {
+export function buildAnswerPrompt(
+  mode: AnswerMode,
+  ctx: AnswerContext,
+): { instructions: string; input: string; citations: Citation[] } {
   if (mode === 'clarify') {
     return {
       instructions: [
@@ -54,16 +58,21 @@ export function buildAnswerPrompt(mode: AnswerMode, ctx: AnswerContext): { instr
   const calls = ctx.database?.calls ?? [];
 
   if (calls.length > 0) {
-    sections.push(['DATABASE DATA (values hidden; refer to them with merge fields)', ...calls.map(describeCall)].join('\n\n'));
+    sections.push(
+      ['DATABASE DATA (values hidden; refer to them with merge fields)', ...calls.map(describeCall)].join('\n\n'),
+    );
     for (const call of calls) {
       citations.push({ id: call.id, kind: 'data', source: call.tool.name, detail: formatArgs(call.args) });
     }
   } else if (ctx.database?.status === 'no_tool') {
-    sections.push('DATABASE: none of the defined database tools fits this question, so no database figures are available.');
+    sections.push(
+      'DATABASE: none of the defined database tools fits this question, so no database figures are available.',
+    );
   }
 
   if (ctx.documents) {
-    const docs = ctx.documents.length === 0 ? ['DOCUMENTS: the search found no matching passages.'] : ['DOCUMENT PASSAGES'];
+    const docs =
+      ctx.documents.length === 0 ? ['DOCUMENTS: the search found no matching passages.'] : ['DOCUMENT PASSAGES'];
     ctx.documents.forEach((chunk, i) => {
       const id = `D${i + 1}`;
       citations.push({ id, kind: 'document', source: chunk.source, detail: chunk.text.slice(0, 200) });
@@ -75,14 +84,11 @@ export function buildAnswerPrompt(mode: AnswerMode, ctx: AnswerContext): { instr
   let context = sections.join('\n\n---\n\n');
   if (context.length > MAX_CONTEXT_CHARS) context = `${context.slice(0, MAX_CONTEXT_CHARS)}\n…(context cut to fit)`;
 
-  const rules = [
-    'You answer business questions using ONLY the context below the question.',
-    `Today is ${ctx.today}.`,
-  ];
+  const rules = ['You answer business questions using ONLY the context below the question.', `Today is ${ctx.today}.`];
   if (calls.length > 0) {
     rules.push(
       '',
-      "DATABASE VALUES ARE HIDDEN FROM YOU. The service fills them in after you write. Wherever a database value belongs, write a merge field instead:",
+      'DATABASE VALUES ARE HIDDEN FROM YOU. The service fills them in after you write. Wherever a database value belongs, write a merge field instead:',
       '- {{call.field}}        the field in the first row                e.g. {{top_customers.customer_name}}',
       '- {{call[2].field}}     the field in row 2 (rows count from 1)',
       '- {{table call}}        every row as a table (put it on its own line)',
@@ -92,10 +98,10 @@ export function buildAnswerPrompt(mode: AnswerMode, ctx: AnswerContext): { instr
       'Rules for database values:',
       '- Never write a database value yourself and never guess one. Use only the call ids and fields listed under DATABASE DATA.',
       '- Write sentences that stay true whatever the values turn out to be. Only say which row is highest, first or latest when the rows description says how rows are ordered.',
-      "- Don't describe trends or compare values (\"grew\", \"more than\") because you can't see them. Present the values and let the reader compare.",
+      '- Don\'t describe trends or compare values ("grew", "more than") because you can\'t see them. Present the values and let the reader compare.',
       '- When a call can return several rows, prefer {{table call}} or {{list call.field}} over picking single rows.',
-      "- Results can be empty; the service then shows \"—\" or \"No matching records\", so don't promise that something exists.",
-      '- Values are already formatted (currency, dates); don\'t add symbols or units around them.',
+      '- Results can be empty; the service then shows "—" or "No matching records", so don\'t promise that something exists.',
+      "- Values are already formatted (currency, dates); don't add symbols or units around them.",
     );
   }
   if (ctx.documents && ctx.documents.length > 0) {
@@ -108,13 +114,18 @@ export function buildAnswerPrompt(mode: AnswerMode, ctx: AnswerContext): { instr
     ...ctx.notes.map((n) => `Tell the user: ${n}`),
   );
 
-  return { instructions: rules.join('\n'), input: `Question: ${ctx.question}\n\nContext:\n\n${context || '(no context was found)'}`, citations };
+  return {
+    instructions: rules.join('\n'),
+    input: `Question: ${ctx.question}\n\nContext:\n\n${context || '(no context was found)'}`,
+    citations,
+  };
 }
 
 function describeCall(call: ToolCallResult): string {
   const header = `Call id: ${call.id}  (tool ${call.tool.name}: ${call.tool.description.trim()})`;
   const args = `Ran with: ${formatArgs(call.args) || 'no parameters'}`;
-  if (call.status === 'failed') return `${header}\n${args}\nSTATUS: this data couldn't be retrieved. Don't use merge fields for "${call.id}"; tell the user it's unavailable.`;
+  if (call.status === 'failed')
+    return `${header}\n${args}\nSTATUS: this data couldn't be retrieved. Don't use merge fields for "${call.id}"; tell the user it's unavailable.`;
   const rows = `Rows: ${call.tool.resultDescription?.trim() || 'as returned by the tool (order not specified).'}`;
   const fields = call.tool.output.map((f) => `- ${f.name} (${f.format ?? 'text'}): ${f.description.trim()}`);
   return [header, args, rows, 'Fields:', ...fields].join('\n');
@@ -122,7 +133,7 @@ function describeCall(call: ToolCallResult): string {
 
 function formatArgs(args: Record<string, unknown>): string {
   return Object.entries(args)
-    .map(([k, v]) => `${k} = ${v === null ? 'not set' : String(v)}`)
+    .map(([k, v]) => `${k} = ${v === null ? 'not set' : toText(v)}`)
     .join(', ');
 }
 

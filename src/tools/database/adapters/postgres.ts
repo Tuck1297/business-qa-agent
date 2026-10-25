@@ -7,6 +7,7 @@
  */
 
 import type { BoundParam } from '../sql.ts';
+import { toText } from '../../../text.ts';
 import type { DbAdapter, QueryOptions } from './types.ts';
 
 // The parts of `pg` this adapter uses. Declared locally so the core doesn't depend on @types/pg.
@@ -33,7 +34,7 @@ export async function createPostgresAdapter(connectionString: string): Promise<D
     const imported = (await import('pg')) as unknown as { default?: PgModule } & PgModule;
     mod = imported.default ?? imported;
   } catch (error) {
-    throw new Error(`The "pg" package isn't installed. Run npm install. (${String(error)})`);
+    throw new Error(`The "pg" package isn't installed. Run npm install. (${toText(error)})`, { cause: error });
   }
   // Return DATE columns as "YYYY-MM-DD" text. By default pg turns them into JS Dates at the
   // server's local midnight, which can shift the day once converted to UTC.
@@ -50,7 +51,10 @@ export async function createPostgresAdapter(connectionString: string): Promise<D
         await client.query('BEGIN READ ONLY');
         // SET LOCAL can't take a bind parameter; the value is a validated integer.
         await client.query(`SET LOCAL statement_timeout = ${Math.trunc(options.timeoutMs)}`);
-        const result = await client.query(sql, params.map((p) => p.value));
+        const result = await client.query(
+          sql,
+          params.map((p) => p.value),
+        );
         return result.rows;
       } catch (error) {
         broken = isConnectionError(error);

@@ -21,13 +21,29 @@
       "parameters": [
         { "name": "start_date", "type": "date", "description": "First day to include." },
         { "name": "end_date", "type": "date", "description": "Last day to include." },
-        { "name": "region", "type": "string", "description": "Only this sales region.", "required": false, "enum": ["North", "South", "Metro"] }
+        {
+          "name": "region",
+          "type": "string",
+          "description": "Only this sales region.",
+          "required": false,
+          "enum": ["North", "South", "Metro"]
+        }
       ],
       "sql": "SELECT date_trunc('month', invoice_date)::date AS month,\n       COALESCE(SUM(total_amount) FILTER (WHERE status <> 'void'), 0) AS revenue,\n       COUNT(*) FILTER (WHERE status <> 'void') AS invoices\n  FROM reporting.v_invoices\n WHERE invoice_date BETWEEN :start_date AND :end_date\n   AND (:region IS NULL OR region = :region)\n GROUP BY 1\n ORDER BY 1",
       "output": [
         { "name": "month", "description": "The month.", "format": "month", "label": "Month" },
-        { "name": "revenue", "description": "Invoiced revenue in the month, excluding void invoices.", "format": "currency", "label": "Revenue" },
-        { "name": "invoices", "description": "Number of invoices issued in the month.", "format": "integer", "label": "Invoices" }
+        {
+          "name": "revenue",
+          "description": "Invoiced revenue in the month, excluding void invoices.",
+          "format": "currency",
+          "label": "Revenue"
+        },
+        {
+          "name": "invoices",
+          "description": "Number of invoices issued in the month.",
+          "format": "integer",
+          "label": "Invoices"
+        }
       ],
       "resultDescription": "One row per month that has invoices, oldest month first.",
       "example": { "start_date": "2026-01-01", "end_date": "2026-12-31", "region": null }
@@ -37,14 +53,38 @@
       "description": "Customers with the largest unpaid invoice balances. Use for who owes the most, accounts receivable or collections questions.",
       "source": "sales",
       "parameters": [
-        { "name": "limit", "type": "integer", "description": "How many customers to return.", "required": false, "default": 5, "minimum": 1, "maximum": 50 },
-        { "name": "region", "type": "string", "description": "Only this sales region.", "required": false, "enum": ["North", "South", "Metro"] }
+        {
+          "name": "limit",
+          "type": "integer",
+          "description": "How many customers to return.",
+          "required": false,
+          "default": 5,
+          "minimum": 1,
+          "maximum": 50
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "description": "Only this sales region.",
+          "required": false,
+          "enum": ["North", "South", "Metro"]
+        }
       ],
       "sql": "SELECT customer_name,\n       SUM(total_amount - amount_paid) AS balance,\n       COUNT(*) AS open_invoices\n  FROM reporting.v_invoices\n WHERE status NOT IN ('paid', 'void')\n   AND (:region IS NULL OR region = :region)\n GROUP BY customer_name\nHAVING SUM(total_amount - amount_paid) > 0\n ORDER BY balance DESC\n LIMIT :limit",
       "output": [
         { "name": "customer_name", "description": "Customer's business name.", "label": "Customer" },
-        { "name": "balance", "description": "Unpaid balance across the customer's open invoices.", "format": "currency", "label": "Unpaid balance" },
-        { "name": "open_invoices", "description": "Number of invoices not fully paid.", "format": "integer", "label": "Open invoices" }
+        {
+          "name": "balance",
+          "description": "Unpaid balance across the customer's open invoices.",
+          "format": "currency",
+          "label": "Unpaid balance"
+        },
+        {
+          "name": "open_invoices",
+          "description": "Number of invoices not fully paid.",
+          "format": "integer",
+          "label": "Open invoices"
+        }
       ],
       "resultDescription": "One row per customer with an unpaid balance, largest balance first.",
       "example": { "limit": 5, "region": null }
@@ -55,7 +95,13 @@
       "source": "sales",
       "parameters": [
         { "name": "as_of", "type": "date", "description": "The date to measure lateness on; usually today." },
-        { "name": "region", "type": "string", "description": "Only this sales region.", "required": false, "enum": ["North", "South", "Metro"] }
+        {
+          "name": "region",
+          "type": "string",
+          "description": "Only this sales region.",
+          "required": false,
+          "enum": ["North", "South", "Metro"]
+        }
       ],
       "sql": "SELECT invoice_number,\n       customer_name,\n       due_date,\n       total_amount - amount_paid AS balance,\n       :as_of - due_date AS days_overdue\n  FROM reporting.v_invoices\n WHERE due_date < :as_of\n   AND status NOT IN ('paid', 'void')\n   AND (:region IS NULL OR region = :region)\n ORDER BY days_overdue DESC, invoice_number",
       "output": [
@@ -63,7 +109,12 @@
         { "name": "customer_name", "description": "Customer's business name.", "label": "Customer" },
         { "name": "due_date", "description": "Date payment was due.", "format": "date", "label": "Due" },
         { "name": "balance", "description": "Amount still unpaid.", "format": "currency", "label": "Balance" },
-        { "name": "days_overdue", "description": "Days past the due date.", "format": "integer", "label": "Days overdue" }
+        {
+          "name": "days_overdue",
+          "description": "Days past the due date.",
+          "format": "integer",
+          "label": "Days overdue"
+        }
       ],
       "resultDescription": "One row per overdue invoice, most overdue first.",
       "maxRows": 100,
@@ -74,7 +125,12 @@
       "description": "Details of one invoice by its invoice number: customer, dates, amounts and payment status.",
       "source": "sales",
       "parameters": [
-        { "name": "invoice_number", "type": "string", "description": "Invoice number, e.g. INV-10423.", "maxLength": 40 }
+        {
+          "name": "invoice_number",
+          "type": "string",
+          "description": "Invoice number, e.g. INV-10423.",
+          "maxLength": 40
+        }
       ],
       "sql": "SELECT invoice_number, customer_name, invoice_date, due_date, total_amount, amount_paid, status\n  FROM reporting.v_invoices\n WHERE invoice_number = :invoice_number",
       "output": [
@@ -82,9 +138,18 @@
         { "name": "customer_name", "description": "Customer's business name.", "label": "Customer" },
         { "name": "invoice_date", "description": "Date issued.", "format": "date", "label": "Issued" },
         { "name": "due_date", "description": "Date payment is due.", "format": "date", "label": "Due" },
-        { "name": "total_amount", "description": "Invoice total including tax.", "format": "currency", "label": "Total" },
+        {
+          "name": "total_amount",
+          "description": "Invoice total including tax.",
+          "format": "currency",
+          "label": "Total"
+        },
         { "name": "amount_paid", "description": "Amount paid so far.", "format": "currency", "label": "Paid" },
-        { "name": "status", "description": "Payment status: draft, sent, partially_paid, paid or void.", "label": "Status" }
+        {
+          "name": "status",
+          "description": "Payment status: draft, sent, partially_paid, paid or void.",
+          "label": "Status"
+        }
       ],
       "resultDescription": "One row for the invoice, or no rows if the number doesn't exist.",
       "example": { "invoice_number": "INV-1002" }
@@ -97,7 +162,12 @@
       "sql": "SELECT priority, COUNT(*) AS open_tickets\n  FROM dbo.v_tickets\n WHERE status <> 'closed'\n GROUP BY priority\n ORDER BY CASE priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END",
       "output": [
         { "name": "priority", "description": "Ticket priority: urgent, high, normal or low.", "label": "Priority" },
-        { "name": "open_tickets", "description": "Open tickets with this priority.", "format": "integer", "label": "Open tickets" }
+        {
+          "name": "open_tickets",
+          "description": "Open tickets with this priority.",
+          "format": "integer",
+          "label": "Open tickets"
+        }
       ],
       "resultDescription": "One row per priority that has open tickets, most urgent first.",
       "example": {}
@@ -112,9 +182,23 @@
       ],
       "sql": "SELECT category,\n       AVG(CAST(hours_to_resolve AS float)) AS avg_hours,\n       COUNT(*) AS closed_tickets\n  FROM dbo.v_tickets\n WHERE closed_at >= :start_date\n   AND closed_at < DATEADD(day, 1, :end_date)\n GROUP BY category\n ORDER BY avg_hours DESC",
       "output": [
-        { "name": "category", "description": "Ticket category: billing, login, bug or feature_request.", "label": "Category" },
-        { "name": "avg_hours", "description": "Average hours from open to close.", "format": "number", "label": "Avg hours" },
-        { "name": "closed_tickets", "description": "Tickets closed in the range.", "format": "integer", "label": "Closed" }
+        {
+          "name": "category",
+          "description": "Ticket category: billing, login, bug or feature_request.",
+          "label": "Category"
+        },
+        {
+          "name": "avg_hours",
+          "description": "Average hours from open to close.",
+          "format": "number",
+          "label": "Avg hours"
+        },
+        {
+          "name": "closed_tickets",
+          "description": "Tickets closed in the range.",
+          "format": "integer",
+          "label": "Closed"
+        }
       ],
       "resultDescription": "One row per category with closed tickets, slowest first.",
       "example": { "start_date": "2026-07-01", "end_date": "2026-09-30" }

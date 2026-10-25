@@ -17,7 +17,16 @@ class ScriptedAgent implements AskHandler {
     const at = new Date().toISOString();
     emit({ type: 'run.started', runId, question, at });
     emit({ type: 'step.started', runId, step: 'route', key: 'route', label: 'Routing', at });
-    emit({ type: 'step.completed', runId, step: 'route', key: 'route', label: 'Routing', durationMs: 1, data: { purpose: 'business_data' }, at });
+    emit({
+      type: 'step.completed',
+      runId,
+      step: 'route',
+      key: 'route',
+      label: 'Routing',
+      durationMs: 1,
+      data: { purpose: 'business_data' },
+      at,
+    });
     if (question.includes('slow')) {
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(resolve, 2_000);
@@ -49,7 +58,12 @@ let base: string;
 const agent = new ScriptedAgent();
 
 before(async () => {
-  server = createHttpServer({ agent, apiToken: TOKEN, status: { database: true, documents: false }, indexHtmlPath: null });
+  server = createHttpServer({
+    agent,
+    apiToken: TOKEN,
+    status: { database: true, documents: false },
+    indexHtmlPath: null,
+  });
   wss = await attachWebSocket(server, agent, TOKEN);
   assert.ok(wss, 'the ws package should be installed for these tests');
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -97,7 +111,10 @@ describe('HTTP API', () => {
     assert.equal(res.status, 200);
     const body = (await res.json()) as { answer: string; events: AgentEvent[] };
     assert.equal(body.answer, 'Hello world');
-    assert.deepEqual(body.events.map((e) => e.type), ['run.started', 'step.started', 'step.completed', 'run.completed']);
+    assert.deepEqual(
+      body.events.map((e) => e.type),
+      ['run.started', 'step.started', 'step.completed', 'run.completed'],
+    );
   });
 
   it('POST /ask returns 502 with the events when the run fails', async () => {
@@ -121,40 +138,51 @@ describe('HTTP API', () => {
         assert.equal(eventLine, `event: ${parsed.type}`);
         return parsed;
       });
-    assert.deepEqual(events.map((e) => e.type), ['run.started', 'step.started', 'step.completed', 'answer.delta', 'answer.delta', 'run.completed']);
+    assert.deepEqual(
+      events.map((e) => e.type),
+      ['run.started', 'step.started', 'step.completed', 'answer.delta', 'answer.delta', 'run.completed'],
+    );
   });
 });
 
-describe('WebSocket /ws', () => {
-  function connect(): Promise<{ ws: WebSocket; messages: Array<Record<string, unknown>>; next: (type: string) => Promise<Record<string, unknown>>; closed: Promise<number> }> {
-    const ws = new WebSocket(`${base.replace('http', 'ws')}/ws`);
-    const messages: Array<Record<string, unknown>> = [];
-    const waiters: Array<{ type: string; resolve: (m: Record<string, unknown>) => void }> = [];
-    ws.addEventListener('message', (event) => {
-      const message = JSON.parse(String(event.data)) as Record<string, unknown>;
-      messages.push(message);
-      const i = waiters.findIndex((w) => w.type === message.type);
-      if (i !== -1) {
-        (message as { _taken?: boolean })._taken = true;
-        waiters.splice(i, 1)[0]!.resolve(message);
+/** Open a WebSocket client with helpers to await messages by type. */
+function connect(): Promise<{
+  ws: WebSocket;
+  messages: Array<Record<string, unknown>>;
+  next: (type: string) => Promise<Record<string, unknown>>;
+  closed: Promise<number>;
+}> {
+  const ws = new WebSocket(`${base.replace('http', 'ws')}/ws`);
+  const messages: Array<Record<string, unknown>> = [];
+  // Messages already handed to a next() call, so each is returned once.
+  const taken = new WeakSet<object>();
+  const waiters: Array<{ type: string; resolve: (m: Record<string, unknown>) => void }> = [];
+  ws.addEventListener('message', (event) => {
+    const message = JSON.parse(String(event.data)) as Record<string, unknown>;
+    messages.push(message);
+    const i = waiters.findIndex((w) => w.type === message.type);
+    if (i !== -1) {
+      taken.add(message);
+      waiters.splice(i, 1)[0]!.resolve(message);
+    }
+  });
+  const closed = new Promise<number>((resolve) => ws.addEventListener('close', (e) => resolve(e.code)));
+  const next = (type: string) =>
+    new Promise<Record<string, unknown>>((resolve) => {
+      const seen = messages.find((m) => m.type === type && !taken.has(m));
+      if (seen) {
+        taken.add(seen);
+        return resolve(seen);
       }
+      waiters.push({ type, resolve });
     });
-    const closed = new Promise<number>((resolve) => ws.addEventListener('close', (e) => resolve(e.code)));
-    const next = (type: string) =>
-      new Promise<Record<string, unknown>>((resolve) => {
-        const seen = messages.find((m) => m.type === type && !(m as { _taken?: boolean })._taken);
-        if (seen) {
-          (seen as { _taken?: boolean })._taken = true;
-          return resolve(seen);
-        }
-        waiters.push({ type, resolve });
-      });
-    return new Promise((resolve, reject) => {
-      ws.addEventListener('open', () => resolve({ ws, messages, next, closed }));
-      ws.addEventListener('error', () => reject(new Error('ws error')));
-    });
-  }
+  return new Promise((resolve, reject) => {
+    ws.addEventListener('open', () => resolve({ ws, messages, next, closed }));
+    ws.addEventListener('error', () => reject(new Error('ws error')));
+  });
+}
 
+describe('WebSocket /ws', () => {
   it('authenticates, then streams every event tagged with the requestId', async () => {
     const c = await connect();
     c.ws.send(JSON.stringify({ type: 'auth', token: TOKEN }));
@@ -163,7 +191,14 @@ describe('WebSocket /ws', () => {
     const done = await c.next('run.completed');
     assert.equal(done.answer, 'Hello world');
     const runEvents = c.messages.filter((m) => m.requestId === 'q1').map((m) => m.type);
-    assert.deepEqual(runEvents, ['run.started', 'step.started', 'step.completed', 'answer.delta', 'answer.delta', 'run.completed']);
+    assert.deepEqual(runEvents, [
+      'run.started',
+      'step.started',
+      'step.completed',
+      'answer.delta',
+      'answer.delta',
+      'run.completed',
+    ]);
     c.ws.close();
   });
 

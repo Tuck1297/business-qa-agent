@@ -2,7 +2,14 @@
 
 import { readFileSync } from 'node:fs';
 import type { AgentEvent } from '../src/events.ts';
-import type { DecisionAnswer, DecisionQuestion, FunctionCall, LlmClient, TextStreamRequest, ToolCallRequest } from '../src/llm/types.ts';
+import type {
+  DecisionAnswer,
+  DecisionQuestion,
+  FunctionCall,
+  LlmClient,
+  TextStreamRequest,
+  ToolCallRequest,
+} from '../src/llm/types.ts';
 import { validateTools, type ToolSet } from '../src/tools/database/definitions.ts';
 
 export function exampleTools(): ToolSet {
@@ -33,7 +40,10 @@ export class FakeLlm implements LlmClient {
   }
 
   async callTools(request: ToolCallRequest): Promise<FunctionCall[]> {
-    this.calls.push({ kind: 'callTools', payload: { instructions: request.instructions, input: request.input, tools: request.tools } });
+    this.calls.push({
+      kind: 'callTools',
+      payload: { instructions: request.instructions, input: request.input, tools: request.tools },
+    });
     if (!this.script.callTools) throw new Error('callTools not scripted');
     this.toolCallCount += 1;
     return this.script.callTools(request, this.toolCallCount);
@@ -53,7 +63,13 @@ export class FakeLlm implements LlmClient {
 }
 
 /** Route answers: which predicates fire and the purpose. */
-export function routeAnswers(opts: { purpose: string; db?: number; docs?: number; ambiguous?: number; confidence?: number }): DecisionAnswer[] {
+export function routeAnswers(opts: {
+  purpose: string;
+  db?: number;
+  docs?: number;
+  ambiguous?: number;
+  confidence?: number;
+}): DecisionAnswer[] {
   return [
     { type: 'choice', name: 'purpose', choice: opts.purpose, confidence: opts.confidence ?? 0.9, probabilities: [] },
     { type: 'predicate', name: 'needs_database', probability: opts.db ?? 0 },
@@ -91,4 +107,16 @@ export function streamingResponse(pieces: string[], init: ResponseInit = { statu
     },
   });
   return new Response(body, { headers: { 'Content-Type': 'text/event-stream' }, ...init });
+}
+
+/** The URL a fetch call was made with, as text. */
+export function urlOf(input: string | URL | Request): string {
+  if (typeof input === 'string') return input;
+  return input instanceof Request ? input.url : input.href;
+}
+
+/** The JSON body a fetch call sent (these clients always send a string body). */
+// oxlint-disable-next-line typescript/no-explicit-any -- tests read arbitrary fields from the sent body
+export function jsonBody(init: RequestInit): any {
+  return typeof init.body === 'string' ? JSON.parse(init.body) : null;
 }

@@ -7,6 +7,7 @@
  */
 
 import { checkValueType, isRequired, type DbTool, type ParamType, type ToolParameter } from './definitions.ts';
+import { toText } from '../../text.ts';
 
 export type ArgValue = string | number | boolean | null;
 
@@ -37,7 +38,10 @@ export function toFunctionTool(tool: DbTool): FunctionTool {
     if (p.type === 'datetime') hints.push('ISO 8601 date-time.');
     if (p.minimum !== undefined) hints.push(`Minimum ${p.minimum}.`);
     if (p.maximum !== undefined) hints.push(`Maximum ${p.maximum}.`);
-    if (optional) hints.push(`Optional: use null if the question doesn't specify it${p.default !== undefined && p.default !== null ? ` (default ${JSON.stringify(p.default)})` : ''}.`);
+    if (optional)
+      hints.push(
+        `Optional: use null if the question doesn't specify it${p.default !== undefined && p.default !== null ? ` (default ${JSON.stringify(p.default)})` : ''}.`,
+      );
     const schema: Record<string, unknown> = { type: optional ? [type, 'null'] : type, description: hints.join(' ') };
     if (p.enum) schema.enum = optional ? [...p.enum, null] : [...p.enum];
     properties[p.name] = schema;
@@ -68,11 +72,13 @@ export class ArgumentError extends Error {
 /** Validate and coerce model-supplied arguments. Missing optional parameters become their default or null. */
 export function validateArguments(tool: DbTool, raw: unknown): Record<string, ArgValue> {
   const problems: string[] = [];
-  const input = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+  const input =
+    raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
   if (!input) throw new ArgumentError(tool.name, ['Arguments must be a JSON object.']);
 
   const declared = new Set(tool.parameters.map((p) => p.name));
-  for (const key of Object.keys(input)) if (!declared.has(key)) problems.push(`"${key}" isn't a parameter of ${tool.name}.`);
+  for (const key of Object.keys(input))
+    if (!declared.has(key)) problems.push(`"${key}" isn't a parameter of ${tool.name}.`);
 
   const values: Record<string, ArgValue> = {};
   for (const p of tool.parameters) {
@@ -97,9 +103,10 @@ function coerce(value: unknown, p: ToolParameter): ArgValue | { problem: string 
   switch (p.type) {
     case 'number':
     case 'integer': {
-      const n = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN;
-      if (!Number.isFinite(n)) return bad(`"${String(value)}" isn't a number.`);
-      if (p.type === 'integer' && !Number.isInteger(n)) return bad(`"${String(value)}" isn't a whole number.`);
+      const n =
+        typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN;
+      if (!Number.isFinite(n)) return bad(`"${toText(value)}" isn't a number.`);
+      if (p.type === 'integer' && !Number.isInteger(n)) return bad(`"${toText(value)}" isn't a whole number.`);
       if (p.minimum !== undefined && n < p.minimum) return bad(`must be at least ${p.minimum}.`);
       if (p.maximum !== undefined && n > p.maximum) return bad(`must be at most ${p.maximum}.`);
       v = n;
@@ -111,26 +118,27 @@ function coerce(value: unknown, p: ToolParameter): ArgValue | { problem: string 
       else return bad('must be true or false.');
       break;
     case 'date': {
-      const s = String(value).trim();
+      const s = toText(value).trim();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || !isRealDate(s)) return bad(`"${s}" isn't a date in YYYY-MM-DD form.`);
       v = s;
       break;
     }
     case 'datetime': {
-      const s = String(value).trim();
+      const s = toText(value).trim();
       if (!checkValueType(s, 'datetime') || !/^\d{4}-\d{2}-\d{2}/.test(s)) return bad(`"${s}" isn't an ISO date-time.`);
       v = s;
       break;
     }
     case 'string': {
       if (typeof value !== 'string' && typeof value !== 'number') return bad('must be text.');
-      const s = String(value);
+      const s = toText(value);
       if (s.length > (p.maxLength ?? 200)) return bad(`is longer than ${p.maxLength ?? 200} characters.`);
       v = s;
       break;
     }
   }
-  if (p.enum && !p.enum.some((e) => e === v)) return bad(`must be one of ${p.enum.map((e) => JSON.stringify(e)).join(', ')}.`);
+  if (p.enum && !p.enum.some((e) => e === v))
+    return bad(`must be one of ${p.enum.map((e) => JSON.stringify(e)).join(', ')}.`);
   return v;
 }
 

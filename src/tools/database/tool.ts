@@ -70,8 +70,16 @@ export async function runDatabaseTools(ctx: DatabaseToolsContext): Promise<Datab
     ctx.runId,
     'plan_tool_calls',
     'Filling in tool parameters',
-    () => planCalls(ctx, shortlist.map((s) => s.tool)),
-    (p) => ({ attempts: p.attempts, calls: p.calls.map((c) => ({ id: c.id, tool: c.tool.name, arguments: c.args })), dropped: p.dropped }),
+    () =>
+      planCalls(
+        ctx,
+        shortlist.map((s) => s.tool),
+      ),
+    (p) => ({
+      attempts: p.attempts,
+      calls: p.calls.map((c) => ({ id: c.id, tool: c.tool.name, arguments: c.args })),
+      dropped: p.dropped,
+    }),
   );
   if (planned.calls.length === 0) return { status: 'no_tool', calls: [] };
 
@@ -90,17 +98,33 @@ export async function runDatabaseTools(ctx: DatabaseToolsContext): Promise<Datab
             arguments: call.args,
             rowCount: r.rows.length,
             truncated: r.truncated,
-            ...(ctx.showSql ? (({ sql, params }) => ({ sql, params }))(ctx.db.prepare(call.tool, call.args)) : {}),
+            ...(ctx.showSql ? sqlDetails(ctx.db, call) : {}),
           }),
           `run_tool:${call.id}`,
         );
-        return { ...call, status: 'ok', result, error: null };
+        return { id: call.id, tool: call.tool, args: call.args, status: 'ok', result, error: null };
       } catch (error) {
-        return { ...call, status: 'failed', result: null, error: errorMessage(error) };
+        return {
+          id: call.id,
+          tool: call.tool,
+          args: call.args,
+          status: 'failed',
+          result: null,
+          error: errorMessage(error),
+        };
       }
     }),
   );
   return { status: 'ok', calls };
+}
+
+/** The statement and parameters a call ran with, for step events (client only). */
+function sqlDetails(
+  db: DatabaseService,
+  call: PlannedCall,
+): { sql: string; params: Array<{ name: string; value: ArgValue }> } {
+  const { sql, params } = db.prepare(call.tool, call.args);
+  return { sql, params };
 }
 
 async function selectTools(ctx: DatabaseToolsContext): Promise<Array<{ tool: DbTool; probability: number }>> {
@@ -117,12 +141,18 @@ async function selectTools(ctx: DatabaseToolsContext): Promise<Array<{ tool: DbT
   return rankShortlist(tools, answers, ctx.selectThreshold);
 }
 
-export function rankShortlist(tools: DbTool[], answers: DecisionAnswer[], threshold: number): Array<{ tool: DbTool; probability: number }> {
-  const probability = new Map(answers.flatMap((a) => (a.type === 'predicate' ? [[a.name, a.probability] as const] : [])));
+export function rankShortlist(
+  tools: DbTool[],
+  answers: DecisionAnswer[],
+  threshold: number,
+): Array<{ tool: DbTool; probability: number }> {
+  const probability = new Map(
+    answers.flatMap((a) => (a.type === 'predicate' ? [[a.name, a.probability] as const] : [])),
+  );
   return tools
     .map((tool) => ({ tool, probability: probability.get(tool.name) ?? 0 }))
     .filter((t) => t.probability >= threshold)
-    .sort((a, b) => b.probability - a.probability)
+    .toSorted((a, b) => b.probability - a.probability)
     .slice(0, MAX_SHORTLIST);
 }
 
@@ -132,7 +162,10 @@ interface PlannedCall {
   args: Record<string, ArgValue>;
 }
 
-async function planCalls(ctx: DatabaseToolsContext, tools: DbTool[]): Promise<{ calls: PlannedCall[]; attempts: number; dropped: number }> {
+async function planCalls(
+  ctx: DatabaseToolsContext,
+  tools: DbTool[],
+): Promise<{ calls: PlannedCall[]; attempts: number; dropped: number }> {
   const instructions = [
     'You choose which database tools to call to answer a business question, and fill in their parameters.',
     `Today is ${ctx.today} (${ctx.timezone}). Turn relative dates such as "last month", "this year" or "Q3" into explicit dates based on today.`,
@@ -143,7 +176,14 @@ async function planCalls(ctx: DatabaseToolsContext, tools: DbTool[]): Promise<{ 
   let input = ctx.question;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const raw = await ctx.llm.callTools({ instructions, input, tools: tools.map(toFunctionTool), ...(ctx.signal ? { signal: ctx.signal } : {}) });
+    // Sequential on purpose: the second attempt only happens if the first is rejected.
+    // oxlint-disable-next-line no-await-in-loop
+    const raw = await ctx.llm.callTools({
+      instructions,
+      input,
+      tools: tools.map(toFunctionTool),
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
+    });
     try {
       const { calls, dropped } = resolveCalls(raw, tools, ctx.maxCalls);
       return { calls, attempts: attempt, dropped };
@@ -157,7 +197,11 @@ async function planCalls(ctx: DatabaseToolsContext, tools: DbTool[]): Promise<{ 
 }
 
 /** Check names, parse and validate arguments, cap the count, and assign merge-field ids. */
-export function resolveCalls(raw: FunctionCall[], allowed: DbTool[], maxCalls: number): { calls: PlannedCall[]; dropped: number } {
+export function resolveCalls(
+  raw: FunctionCall[],
+  allowed: DbTool[],
+  maxCalls: number,
+): { calls: PlannedCall[]; dropped: number } {
   const calls: PlannedCall[] = [];
   const seen = new Map<string, number>();
   for (const call of raw.slice(0, maxCalls)) {

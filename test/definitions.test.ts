@@ -48,7 +48,10 @@ describe('tool definitions', () => {
 
   it('only allows a single SELECT or WITH statement', () => {
     assert.match(problems([{ ...goodTool, sql: 'DELETE FROM v WHERE d >= :start_date' }]), /single SELECT/);
-    assert.match(problems([{ ...goodTool, sql: 'SELECT 1 AS revenue WHERE :start_date IS NOT NULL; DROP TABLE v' }]), /one statement/);
+    assert.match(
+      problems([{ ...goodTool, sql: 'SELECT 1 AS revenue WHERE :start_date IS NOT NULL; DROP TABLE v' }]),
+      /one statement/,
+    );
     assert.deepEqual(checkSql("-- totals\nWITH x AS (SELECT ';' AS s) SELECT s FROM x; ", 'postgres'), []);
     assert.deepEqual(checkSql('/* a; b */ SELECT [a;b] FROM t', 'sqlserver'), []);
   });
@@ -62,7 +65,10 @@ describe('tool definitions', () => {
           { name: 'n', type: 'integer', description: 'x', enum: ['a'], default: 'five' },
         ],
         sql: 'SELECT 1 AS revenue WHERE :start_date IS NOT NULL AND :n > 0',
-        output: [{ name: 'total revenue', description: 'x' }, { name: 'r', description: 'x', format: 'money' }],
+        output: [
+          { name: 'total revenue', description: 'x' },
+          { name: 'r', description: 'x', format: 'money' },
+        ],
       },
     ]);
     assert.match(text, /type must be one of/);
