@@ -6,13 +6,7 @@
 import type { MergeReport } from './merge/merge.ts';
 import type { OutputField } from './tools/database/definitions.ts';
 
-export type StepName =
-  | 'route'
-  | 'select_tools'
-  | 'plan_tool_calls'
-  | 'run_tool'
-  | 'search_documents'
-  | 'write_answer';
+export type StepName = 'route' | 'select_tools' | 'plan_tool_calls' | 'run_tool' | 'search_documents' | 'write_answer';
 
 export interface Citation {
   /** "D1", "D2"… for document passages; the call id (e.g. "revenue_by_month") for database data. */

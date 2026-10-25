@@ -24,7 +24,9 @@ describe('Cloudflare AI Search client', () => {
       timeoutMs: 5_000,
       fetch: async (url, init) => {
         captured = { url: String(url), init: init ?? {} };
-        return new Response(JSON.stringify({ success: true, errors: [], result: { search_query: 'pto', chunks: [chunk(1), chunk(2)] } }));
+        return new Response(
+          JSON.stringify({ success: true, errors: [], result: { search_query: 'pto', chunks: [chunk(1), chunk(2)] } }),
+        );
       },
     });
     const chunks = await client.search('How much PTO do part-timers get?');
@@ -38,7 +40,10 @@ describe('Cloudflare AI Search client', () => {
       ai_search_options: { retrieval: { max_num_results: 8, match_threshold: 0.4 } },
     });
     assert.equal((captured!.init.headers as Record<string, string>).Authorization, 'Bearer cf-token');
-    assert.deepEqual(chunks.map((c) => c.source), ['policies/handbook-1.pdf', 'policies/handbook-2.pdf']);
+    assert.deepEqual(
+      chunks.map((c) => c.source),
+      ['policies/handbook-1.pdf', 'policies/handbook-2.pdf'],
+    );
   });
 
   it('accepts unwrapped payloads (Workers binding shape) and skips empty chunks', () => {
@@ -57,7 +62,10 @@ describe('Cloudflare AI Search client', () => {
       maxResults: 5,
       matchThreshold: null,
       timeoutMs: 5_000,
-      fetch: async () => new Response(JSON.stringify({ success: false, errors: [{ code: 10000, message: 'Authentication error' }] }), { status: 403 }),
+      fetch: async () =>
+        new Response(JSON.stringify({ success: false, errors: [{ code: 10000, message: 'Authentication error' }] }), {
+          status: 403,
+        }),
     });
     await assert.rejects(client.search('q'), /403\): 10000 Authentication error/);
   });

@@ -14,7 +14,16 @@
 import { randomUUID } from 'node:crypto';
 import { errorMessage, runStep, type Citation, type DataResult, type EventSink } from '../events.ts';
 import type { LlmClient } from '../llm/types.ts';
-import { emptyReport, renderTemplate, StreamingMerger, tidy, truncationNote, type MergeOptions, type MergeReport, type MergeSource } from '../merge/merge.ts';
+import {
+  emptyReport,
+  renderTemplate,
+  StreamingMerger,
+  tidy,
+  truncationNote,
+  type MergeOptions,
+  type MergeReport,
+  type MergeSource,
+} from '../merge/merge.ts';
 import type { DocumentChunk, DocumentSearch } from '../tools/documents/aiSearch.ts';
 import type { DatabaseService } from '../tools/database/service.ts';
 import { runDatabaseTools, type DatabaseRouteResult } from '../tools/database/tool.ts';
@@ -65,7 +74,8 @@ export class Agent {
 
     try {
       if (!question) throw new Error('The question is empty.');
-      if (question.length > MAX_QUESTION_LENGTH) throw new Error(`The question is longer than ${MAX_QUESTION_LENGTH} characters.`);
+      if (question.length > MAX_QUESTION_LENGTH)
+        throw new Error(`The question is longer than ${MAX_QUESTION_LENGTH} characters.`);
       const today = formatDate(o.now?.() ?? new Date(), o.timezone);
 
       const route = await runStep(
@@ -100,8 +110,24 @@ export class Agent {
       let documents: DocumentChunk[] | null = null;
 
       if (!route.clarify) {
-        if (!route.useDatabase) emit({ type: 'step.skipped', runId, step: 'select_tools', key: 'select_tools', reason: skipReason(route, 'database'), at: now() });
-        if (!route.useDocuments) emit({ type: 'step.skipped', runId, step: 'search_documents', key: 'search_documents', reason: skipReason(route, 'documents'), at: now() });
+        if (!route.useDatabase)
+          emit({
+            type: 'step.skipped',
+            runId,
+            step: 'select_tools',
+            key: 'select_tools',
+            reason: skipReason(route, 'database'),
+            at: now(),
+          });
+        if (!route.useDocuments)
+          emit({
+            type: 'step.skipped',
+            runId,
+            step: 'search_documents',
+            key: 'search_documents',
+            reason: skipReason(route, 'documents'),
+            at: now(),
+          });
 
         const [dbOutcome, docOutcome] = await Promise.allSettled([
           route.useDatabase && o.database
@@ -139,7 +165,10 @@ export class Agent {
         if (dbOutcome.status === 'fulfilled') database = dbOutcome.value;
         else notes.push('the database lookup failed, so database figures are missing.');
         if (docOutcome.status === 'fulfilled') documents = docOutcome.value;
-        else notes.push(`the document search failed (${errorMessage(docOutcome.reason)}), so document information is missing.`);
+        else
+          notes.push(
+            `the document search failed (${errorMessage(docOutcome.reason)}), so document information is missing.`,
+          );
       }
 
       const mode: AnswerMode = route.clarify
@@ -171,7 +200,12 @@ export class Agent {
           if (rest) emit({ type: 'answer.delta', runId, text: rest });
           return text;
         },
-        (text) => ({ mode, characters: text.length, mergeFields: merger.report.fields, unresolved: merger.report.unresolved.length }),
+        (text) => ({
+          mode,
+          characters: text.length,
+          mergeFields: merger.report.fields,
+          unresolved: merger.report.unresolved.length,
+        }),
       );
 
       // Re-render the complete template for the authoritative answer (tidier than the streamed pieces).
@@ -236,18 +270,26 @@ function summarizeRoute(r: RouteDecision): Record<string, unknown> {
     useDocuments: r.useDocuments,
     clarify: r.clarify,
     unavailable: r.unavailable,
-    probabilities: { needsDatabase: round(r.needsDatabase), needsDocuments: round(r.needsDocuments), isAmbiguous: round(r.isAmbiguous) },
+    probabilities: {
+      needsDatabase: round(r.needsDatabase),
+      needsDocuments: round(r.needsDocuments),
+      isAmbiguous: round(r.isAmbiguous),
+    },
   };
 }
 
 function skipReason(route: RouteDecision, tool: 'database' | 'documents'): string {
-  if (route.unavailable.includes(tool)) return `Needed, but ${tool === 'database' ? 'no database tools are' : 'no document search is'} configured.`;
+  if (route.unavailable.includes(tool))
+    return `Needed, but ${tool === 'database' ? 'no database tools are' : 'no document search is'} configured.`;
   return `The question doesn't need the ${tool === 'database' ? 'database' : 'documents'}.`;
 }
 
 function describeDatabase(db: DatabaseService | null): string {
   if (!db) return 'not available';
-  return `tools that look up ${db.tools.tools.map((t) => `${t.name} (${t.description.trim()})`).join('; ')}`.slice(0, 1_500);
+  return `tools that look up ${db.tools.tools.map((t) => `${t.name} (${t.description.trim()})`).join('; ')}`.slice(
+    0,
+    1_500,
+  );
 }
 
 /** YYYY-MM-DD in the given IANA time zone. */

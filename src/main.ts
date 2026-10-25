@@ -19,10 +19,17 @@ async function main(): Promise<void> {
   let database: DatabaseService | null = null;
   if (await exists(config.database.toolsPath)) {
     const tools = await loadTools(config.database.toolsPath);
-    database = new DatabaseService(tools, { timeoutMs: config.database.queryTimeoutMs, maxRows: config.database.maxRows });
-    console.log(`[db] ${tools.tools.length} tool(s) over ${tools.sources.length} source(s): ${tools.tools.map((t) => t.name).join(', ')}`);
+    database = new DatabaseService(tools, {
+      timeoutMs: config.database.queryTimeoutMs,
+      maxRows: config.database.maxRows,
+    });
+    console.log(
+      `[db] ${tools.tools.length} tool(s) over ${tools.sources.length} source(s): ${tools.tools.map((t) => t.name).join(', ')}`,
+    );
   } else {
-    console.warn(`[db] no tools file at ${config.database.toolsPath}; database questions are off. Copy tools.example.json to start.`);
+    console.warn(
+      `[db] no tools file at ${config.database.toolsPath}; database questions are off. Copy tools.example.json to start.`,
+    );
   }
 
   const documents = config.aiSearch ? new AiSearchClient(config.aiSearch) : null;
@@ -32,7 +39,8 @@ async function main(): Promise<void> {
     llm: new OpenAiClient(config.openai),
     database,
     documents,
-    documentsDescription: process.env.DOCUMENTS_DESCRIPTION ?? 'company documents such as policies, procedures and contracts',
+    documentsDescription:
+      process.env.DOCUMENTS_DESCRIPTION ?? 'company documents such as policies, procedures and contracts',
     timezone: config.timezone,
     locale: config.format.locale,
     currency: config.format.currency,
@@ -53,7 +61,8 @@ async function main(): Promise<void> {
 
   server.listen(config.port, config.host, () => {
     console.log(`[http] listening on http://${config.host}:${config.port}${wss ? ' (WebSocket on /ws)' : ''}`);
-    if (!config.apiToken) console.warn('[http] API_TOKEN not set: no authentication (allowed only because the server is on loopback).');
+    if (!config.apiToken)
+      console.warn('[http] API_TOKEN not set: no authentication (allowed only because the server is on loopback).');
   });
 
   const shutdown = (signal: string) => {

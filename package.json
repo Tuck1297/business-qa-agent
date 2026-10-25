@@ -12,6 +12,11 @@
     "dev": "node --env-file-if-exists=.env --watch src/main.ts",
     "test": "node --test --test-reporter=spec \"test/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test",
     "tools:check": "node --env-file-if-exists=.env scripts/check-tools.ts"
   },
   "dependencies": {
@@ -24,6 +29,9 @@
     "@types/node": "^22.10.0",
     "@types/pg": "^8.11.10",
     "@types/ws": "^8.5.13",
+    "oxfmt": "^0.74.0",
+    "oxlint": "^1.89.0",
+    "oxlint-tsgolint": "^7.0.0",
     "typescript": "^7.0.0"
   }
 }

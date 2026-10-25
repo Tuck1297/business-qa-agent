@@ -50,7 +50,10 @@ export async function createPostgresAdapter(connectionString: string): Promise<D
         await client.query('BEGIN READ ONLY');
         // SET LOCAL can't take a bind parameter; the value is a validated integer.
         await client.query(`SET LOCAL statement_timeout = ${Math.trunc(options.timeoutMs)}`);
-        const result = await client.query(sql, params.map((p) => p.value));
+        const result = await client.query(
+          sql,
+          params.map((p) => p.value),
+        );
         return result.rows;
       } catch (error) {
         broken = isConnectionError(error);

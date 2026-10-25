@@ -53,7 +53,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HttpSe
     const html = await readFile(options.indexHtmlPath, 'utf8');
     res.writeHead(200, {
       'Content-Type': 'text/html; charset=utf-8',
-      'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'",
+      'Content-Security-Policy':
+        "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'",
     });
     res.end(html);
     return;
@@ -70,7 +71,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: HttpSe
     } catch (error) {
       return sendJson(res, 400, { error: errorMessage(error) });
     }
-    return url.pathname === '/ask' ? askJson(req, res, options.agent, question) : askStream(req, res, options.agent, question);
+    return url.pathname === '/ask'
+      ? askJson(req, res, options.agent, question)
+      : askStream(req, res, options.agent, question);
   }
 
   sendJson(res, 404, { error: 'Not found' });
@@ -87,7 +90,12 @@ async function askJson(req: IncomingMessage, res: ServerResponse, agent: AskHand
   }
 }
 
-async function askStream(req: IncomingMessage, res: ServerResponse, agent: AskHandler, question: string): Promise<void> {
+async function askStream(
+  req: IncomingMessage,
+  res: ServerResponse,
+  agent: AskHandler,
+  question: string,
+): Promise<void> {
   const controller = abortOnDisconnect(req, res);
   res.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
@@ -128,7 +136,8 @@ export function parseQuestion(body: string): string {
   }
   const question = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>).question : undefined;
   if (typeof question !== 'string' || question.trim() === '') throw new Error('"question" must be a non-empty string.');
-  if (question.length > MAX_QUESTION_LENGTH) throw new Error(`"question" must be at most ${MAX_QUESTION_LENGTH} characters.`);
+  if (question.length > MAX_QUESTION_LENGTH)
+    throw new Error(`"question" must be at most ${MAX_QUESTION_LENGTH} characters.`);
   return question;
 }
 

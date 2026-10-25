@@ -19,7 +19,10 @@ describe('routing', () => {
     const payload = llm.calls[0]!.payload as { input: string; questions: Array<{ type: string; name: string }> };
     assert.match(payload.input, /Question: Revenue last month\?/);
     assert.match(payload.input, /Business database: billing/);
-    assert.deepEqual(payload.questions.map((q) => `${q.type}:${q.name}`), ['choice:purpose', 'predicate:needs_database', 'predicate:needs_documents', 'predicate:is_ambiguous']);
+    assert.deepEqual(
+      payload.questions.map((q) => `${q.type}:${q.name}`),
+      ['choice:purpose', 'predicate:needs_database', 'predicate:needs_documents', 'predicate:is_ambiguous'],
+    );
     assert.equal(route.useDatabase, true);
     assert.equal(route.useDocuments, false);
   });
@@ -41,7 +44,10 @@ describe('routing', () => {
   });
 
   it('flags tools that are needed but not configured', () => {
-    const route = decideRoute(routeAnswers({ purpose: 'data_and_documents' }), { ...options, documentsAvailable: false });
+    const route = decideRoute(routeAnswers({ purpose: 'data_and_documents' }), {
+      ...options,
+      documentsAvailable: false,
+    });
     assert.deepEqual(route.unavailable, ['documents']);
     assert.equal(route.useDocuments, false);
     assert.equal(route.useDatabase, true);

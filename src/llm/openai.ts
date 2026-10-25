@@ -151,7 +151,10 @@ export function parseDecisionAnswers(body: unknown): DecisionAnswer[] {
         confidence: typeof confidence === 'number' ? confidence : 0,
         probabilities: Array.isArray(probabilities)
           ? probabilities
-              .map((p) => ({ value: String(readPath(p, ['value'])), probability: Number(readPath(p, ['probability'])) }))
+              .map((p) => ({
+                value: String(readPath(p, ['value'])),
+                probability: Number(readPath(p, ['probability'])),
+              }))
               .filter((p) => Number.isFinite(p.probability))
           : [],
       };
@@ -181,7 +184,11 @@ export function extractFunctionCalls(body: unknown): FunctionCall[] {
       const args = readPath(item, ['arguments']);
       const callId = readPath(item, ['call_id']) ?? readPath(item, ['id']);
       if (typeof name !== 'string') continue;
-      calls.push({ name, arguments: typeof args === 'string' ? args : JSON.stringify(args ?? {}), callId: String(callId ?? `call_${calls.length + 1}`) });
+      calls.push({
+        name,
+        arguments: typeof args === 'string' ? args : JSON.stringify(args ?? {}),
+        callId: String(callId ?? `call_${calls.length + 1}`),
+      });
     } else if (type === 'message') {
       const content = readPath(item, ['content']);
       const refusal = Array.isArray(content) ? content.find((c) => readPath(c, ['type']) === 'refusal') : undefined;
@@ -195,9 +202,7 @@ export function extractFunctionCalls(body: unknown): FunctionCall[] {
 }
 
 /** Parse a server-sent-events body into JSON payloads (ignores comments and [DONE]). */
-export async function* readServerSentEvents(
-  body: ReadableStream<Uint8Array>,
-): AsyncGenerator<Record<string, unknown>> {
+export async function* readServerSentEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<Record<string, unknown>> {
   const decoder = new TextDecoder();
   let buffer = '';
   const reader = body.getReader();

@@ -6,8 +6,14 @@
 import type { DecisionAnswer, LlmClient } from '../llm/types.ts';
 
 export const PURPOSES = [
-  { value: 'business_data', description: 'Needs figures, counts, totals, lists or other records from the business database.' },
-  { value: 'business_documents', description: 'Needs information from business documents such as policies, procedures, contracts, manuals or notes.' },
+  {
+    value: 'business_data',
+    description: 'Needs figures, counts, totals, lists or other records from the business database.',
+  },
+  {
+    value: 'business_documents',
+    description: 'Needs information from business documents such as policies, procedures, contracts, manuals or notes.',
+  },
   { value: 'data_and_documents', description: 'Needs both database records and business documents.' },
   { value: 'general', description: 'A general question that needs no business data or documents.' },
   { value: 'unclear', description: 'Too vague or incomplete to tell what is being asked.' },
@@ -66,12 +72,14 @@ export async function routeQuestion(
       {
         type: 'predicate',
         name: 'needs_database',
-        instructions: 'Answering requires looking up records, counts, totals, dates or other figures stored in the business database.',
+        instructions:
+          'Answering requires looking up records, counts, totals, dates or other figures stored in the business database.',
       },
       {
         type: 'predicate',
         name: 'needs_documents',
-        instructions: 'Answering requires information written in business documents such as policies, procedures, contracts, manuals or notes.',
+        instructions:
+          'Answering requires information written in business documents such as policies, procedures, contracts, manuals or notes.',
       },
       {
         type: 'predicate',
@@ -107,7 +115,9 @@ export function decideRoute(answers: DecisionAnswer[], options: RouterOptions): 
   const wantsDatabase =
     needsDatabase >= options.predicateThreshold || purpose === 'business_data' || purpose === 'data_and_documents';
   const wantsDocuments =
-    needsDocuments >= options.predicateThreshold || purpose === 'business_documents' || purpose === 'data_and_documents';
+    needsDocuments >= options.predicateThreshold ||
+    purpose === 'business_documents' ||
+    purpose === 'data_and_documents';
   const clarify = isAmbiguous >= options.clarifyThreshold || (purpose === 'unclear' && purposeConfidence >= 0.5);
 
   const unavailable: RouteDecision['unavailable'] = [];

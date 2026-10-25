@@ -9,13 +9,25 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       - run: npm install --no-audit --no-fund
+
       # Type checking must use TypeScript 7, the native (Go) compiler.
       - name: Check TypeScript is 7.x (native compiler)
         run: npx tsc --version | tee /dev/stderr | grep -Eq '^Version 7\.'
+
+      - name: Format (oxfmt)
+        run: |
+          npx oxfmt --check || {
+            npx oxfmt --list-different | sed 's/.*/::error file=&::Not formatted with oxfmt. Run npm run format (or the Format workflow)./'
+            exit 1
+          }
+
+      - name: Lint (oxlint, type-aware)
+        run: npx oxlint --format=github
+
       - run: npm run typecheck
       - run: npm test
