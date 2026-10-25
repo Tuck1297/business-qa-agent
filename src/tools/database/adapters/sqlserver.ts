@@ -8,6 +8,7 @@
 
 import type { ParamType } from '../definitions.ts';
 import type { BoundParam } from '../sql.ts';
+import { toText } from '../../../text.ts';
 import type { DbAdapter, QueryOptions } from './types.ts';
 
 // The parts of `mssql` this adapter uses, declared locally.
@@ -41,7 +42,7 @@ export async function createSqlServerAdapter(connectionString: string, requestTi
     const imported = (await import('mssql')) as unknown as { default?: MssqlModule } & MssqlModule;
     mod = imported.default ?? imported;
   } catch (error) {
-    throw new Error(`The "mssql" package isn't installed. Run npm install. (${String(error)})`);
+    throw new Error(`The "mssql" package isn't installed. Run npm install. (${toText(error)})`, { cause: error });
   }
 
   // Parse the connection string when the library can, so the request timeout applies.

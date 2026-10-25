@@ -27,7 +27,13 @@ jobs:
           }
 
       - name: Lint (oxlint, type-aware)
-        run: npx oxlint --format=github
+        run: |
+          npx oxlint --format=github || {
+            # GitHub shows at most 10 errors and 10 warnings per step; add one annotation with the full report.
+            report=$(npx oxlint --format=unix 2>&1 | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=oxlint full report::${report}"
+            exit 1
+          }
 
       - run: npm run typecheck
       - run: npm test

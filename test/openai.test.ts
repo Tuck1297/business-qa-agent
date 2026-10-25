@@ -133,6 +133,11 @@ describe('Responses API — function calling', () => {
   });
 });
 
+/** A streamed response carrying the given events as SSE data lines. */
+function sse(...events: object[]): Response {
+  return streamingResponse([events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('')]);
+}
+
 describe('Responses API — streaming', () => {
   it('emits text deltas as they arrive, even when SSE events split across network chunks', async () => {
     const events = [
@@ -154,8 +159,6 @@ describe('Responses API — streaming', () => {
   });
 
   it('fails on error events, failed responses, refusals and early stream end', async () => {
-    const sse = (...events: object[]) =>
-      streamingResponse([events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('')]);
     await assert.rejects(
       client(() => sse({ type: 'error', message: 'rate limited' })).c.streamText({
         instructions: '',

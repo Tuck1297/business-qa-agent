@@ -10,6 +10,7 @@
 import type { Citation } from '../events.ts';
 import type { DocumentChunk } from '../tools/documents/aiSearch.ts';
 import type { DatabaseRouteResult, ToolCallResult } from '../tools/database/tool.ts';
+import { toText } from '../text.ts';
 
 export type AnswerMode = 'grounded' | 'clarify' | 'general';
 
@@ -132,7 +133,7 @@ function describeCall(call: ToolCallResult): string {
 
 function formatArgs(args: Record<string, unknown>): string {
   return Object.entries(args)
-    .map(([k, v]) => `${k} = ${v === null ? 'not set' : String(v)}`)
+    .map(([k, v]) => `${k} = ${v === null ? 'not set' : toText(v)}`)
     .join(', ');
 }
 

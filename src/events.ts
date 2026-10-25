@@ -5,6 +5,7 @@
 
 import type { MergeReport } from './merge/merge.ts';
 import type { OutputField } from './tools/database/definitions.ts';
+import { toText } from './text.ts';
 
 export type StepName = 'route' | 'select_tools' | 'plan_tool_calls' | 'run_tool' | 'search_documents' | 'write_answer';
 
@@ -108,5 +109,5 @@ export async function runStep<T>(
 
 export function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
-  return String(error);
+  return toText(error);
 }

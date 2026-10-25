@@ -7,6 +7,7 @@
  */
 
 import { checkValueType, isRequired, type DbTool, type ParamType, type ToolParameter } from './definitions.ts';
+import { toText } from '../../text.ts';
 
 export type ArgValue = string | number | boolean | null;
 
@@ -104,8 +105,8 @@ function coerce(value: unknown, p: ToolParameter): ArgValue | { problem: string 
     case 'integer': {
       const n =
         typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN;
-      if (!Number.isFinite(n)) return bad(`"${String(value)}" isn't a number.`);
-      if (p.type === 'integer' && !Number.isInteger(n)) return bad(`"${String(value)}" isn't a whole number.`);
+      if (!Number.isFinite(n)) return bad(`"${toText(value)}" isn't a number.`);
+      if (p.type === 'integer' && !Number.isInteger(n)) return bad(`"${toText(value)}" isn't a whole number.`);
       if (p.minimum !== undefined && n < p.minimum) return bad(`must be at least ${p.minimum}.`);
       if (p.maximum !== undefined && n > p.maximum) return bad(`must be at most ${p.maximum}.`);
       v = n;
@@ -117,20 +118,20 @@ function coerce(value: unknown, p: ToolParameter): ArgValue | { problem: string 
       else return bad('must be true or false.');
       break;
     case 'date': {
-      const s = String(value).trim();
+      const s = toText(value).trim();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || !isRealDate(s)) return bad(`"${s}" isn't a date in YYYY-MM-DD form.`);
       v = s;
       break;
     }
     case 'datetime': {
-      const s = String(value).trim();
+      const s = toText(value).trim();
       if (!checkValueType(s, 'datetime') || !/^\d{4}-\d{2}-\d{2}/.test(s)) return bad(`"${s}" isn't an ISO date-time.`);
       v = s;
       break;
     }
     case 'string': {
       if (typeof value !== 'string' && typeof value !== 'number') return bad('must be text.');
-      const s = String(value);
+      const s = toText(value);
       if (s.length > (p.maxLength ?? 200)) return bad(`is longer than ${p.maxLength ?? 200} characters.`);
       v = s;
       break;
