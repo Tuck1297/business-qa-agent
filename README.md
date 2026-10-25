@@ -48,7 +48,7 @@ More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Other tools worth adding a
 
 ## Quick start
 
-Requires **Node 22.18+** (it runs the TypeScript directly; there's no build step).
+Requires **Node 22.18+** (it runs the TypeScript directly; there's no build step). Type checking uses TypeScript 7, the native compiler.
 
 ```bash
 npm install
@@ -210,9 +210,11 @@ An automated test runs a full question and checks that no row value appears in a
 
 ## Development
 
+Type checking uses **TypeScript 7**, the native compiler (a Go port of TypeScript, typically 8–12× faster than 6.x). It's the regular `typescript` package (`^7.0.0`), still run as `tsc`; CI fails if any other major version is installed. Node runs the `.ts` files directly by stripping types, so the compiler is only used for checking.
+
 ```bash
 npm test               # node:test, no network
-npm run typecheck      # tsc --noEmit
+npm run typecheck      # tsc --noEmit (TypeScript 7)
 npm run tools:check    # validate tools.json; add -- --run to execute the examples
 npm run dev            # restart on file changes
 ```
