@@ -14,5 +14,8 @@ jobs:
         with:
           node-version: 22
       - run: npm install --no-audit --no-fund
+      # Type checking must use TypeScript 7, the native (Go) compiler.
+      - name: Check TypeScript is 7.x (native compiler)
+        run: npx tsc --version | tee /dev/stderr | grep -Eq '^Version 7\.'
       - run: npm run typecheck
       - run: npm test
