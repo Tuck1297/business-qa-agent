@@ -2,7 +2,14 @@
 
 import { readFileSync } from 'node:fs';
 import type { AgentEvent } from '../src/events.ts';
-import type { DecisionAnswer, DecisionQuestion, FunctionCall, LlmClient, TextStreamRequest, ToolCallRequest } from '../src/llm/types.ts';
+import type {
+  DecisionAnswer,
+  DecisionQuestion,
+  FunctionCall,
+  LlmClient,
+  TextStreamRequest,
+  ToolCallRequest,
+} from '../src/llm/types.ts';
 import { validateTools, type ToolSet } from '../src/tools/database/definitions.ts';
 
 export function exampleTools(): ToolSet {
@@ -33,7 +40,10 @@ export class FakeLlm implements LlmClient {
   }
 
   async callTools(request: ToolCallRequest): Promise<FunctionCall[]> {
-    this.calls.push({ kind: 'callTools', payload: { instructions: request.instructions, input: request.input, tools: request.tools } });
+    this.calls.push({
+      kind: 'callTools',
+      payload: { instructions: request.instructions, input: request.input, tools: request.tools },
+    });
     if (!this.script.callTools) throw new Error('callTools not scripted');
     this.toolCallCount += 1;
     return this.script.callTools(request, this.toolCallCount);
@@ -53,7 +63,13 @@ export class FakeLlm implements LlmClient {
 }
 
 /** Route answers: which predicates fire and the purpose. */
-export function routeAnswers(opts: { purpose: string; db?: number; docs?: number; ambiguous?: number; confidence?: number }): DecisionAnswer[] {
+export function routeAnswers(opts: {
+  purpose: string;
+  db?: number;
+  docs?: number;
+  ambiguous?: number;
+  confidence?: number;
+}): DecisionAnswer[] {
   return [
     { type: 'choice', name: 'purpose', choice: opts.purpose, confidence: opts.confidence ?? 0.9, probabilities: [] },
     { type: 'predicate', name: 'needs_database', probability: opts.db ?? 0 },

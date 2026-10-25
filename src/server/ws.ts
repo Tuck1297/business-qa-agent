@@ -38,13 +38,19 @@ interface WsModule {
 const OPEN = 1;
 const AUTH_TIMEOUT_MS = 10_000;
 
-export async function attachWebSocket(server: Server, agent: AskHandler, apiToken: string | null): Promise<WsServer | null> {
+export async function attachWebSocket(
+  server: Server,
+  agent: AskHandler,
+  apiToken: string | null,
+): Promise<WsServer | null> {
   let mod: WsModule;
   try {
     const imported = (await import('ws')) as unknown as { default?: WsModule } & WsModule;
     mod = imported.WebSocketServer ? imported : (imported.default ?? imported);
   } catch {
-    console.warn('[ws] The "ws" package isn\'t installed, so WebSocket streaming is off. SSE on POST /ask/stream still works.');
+    console.warn(
+      '[ws] The "ws" package isn\'t installed, so WebSocket streaming is off. SSE on POST /ask/stream still works.',
+    );
     return null;
   }
 
@@ -104,8 +110,13 @@ export function handleConnection(socket: WsSocket, agent: AskHandler, apiToken: 
       current?.abort(new Error('Cancelled by the client.'));
       return;
     }
-    if (message.type !== 'ask') return send({ type: 'error', error: `Unknown message type "${String(message.type)}".` });
-    if (current) return send({ type: 'error', error: 'A question is already running on this connection. Cancel it or open another connection.' });
+    if (message.type !== 'ask')
+      return send({ type: 'error', error: `Unknown message type "${String(message.type)}".` });
+    if (current)
+      return send({
+        type: 'error',
+        error: 'A question is already running on this connection. Cancel it or open another connection.',
+      });
 
     const question = typeof message.question === 'string' ? message.question : '';
     const requestId = typeof message.requestId === 'string' ? message.requestId.slice(0, 100) : null;

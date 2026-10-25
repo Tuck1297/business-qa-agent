@@ -1,0 +1,32 @@
+name: Format
+
+# Formats the code with oxfmt and commits the result.
+# Run it from the Actions tab (Run workflow), or push a branch named format/<anything>.
+on:
+  workflow_dispatch:
+  push:
+    branches: ['format/**']
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - run: npx oxfmt
+      - name: Commit changes
+        run: |
+          if git diff --quiet; then
+            echo "Already formatted."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git commit -am "style: format with oxfmt"
+          git push

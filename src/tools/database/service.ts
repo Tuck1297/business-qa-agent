@@ -18,7 +18,9 @@ export interface QueryResult {
 export type AdapterFactory = (source: ToolSource, connectionString: string, timeoutMs: number) => Promise<DbAdapter>;
 
 export const defaultAdapterFactory: AdapterFactory = (source, connectionString, timeoutMs) =>
-  source.engine === 'postgres' ? createPostgresAdapter(connectionString) : createSqlServerAdapter(connectionString, timeoutMs);
+  source.engine === 'postgres'
+    ? createPostgresAdapter(connectionString)
+    : createSqlServerAdapter(connectionString, timeoutMs);
 
 export class DatabaseService {
   readonly tools: ToolSet;
@@ -40,7 +42,10 @@ export class DatabaseService {
   }
 
   /** The exact statement and parameters a call would run (for step events and debugging). */
-  prepare(tool: DbTool, args: Record<string, ArgValue>): { sql: string; params: Array<{ name: string; value: ArgValue }>; rowLimit: number } {
+  prepare(
+    tool: DbTool,
+    args: Record<string, ArgValue>,
+  ): { sql: string; params: Array<{ name: string; value: ArgValue }>; rowLimit: number } {
     const source = sourceOf(this.tools, tool);
     const types = Object.fromEntries(tool.parameters.map((p) => [p.name, p.type]));
     const bound = bindSql(normalizeSql(tool.sql), source.engine, types, args);
@@ -58,7 +63,9 @@ export class DatabaseService {
     const bound = bindSql(normalizeSql(tool.sql), source.engine, types, args);
     const rowLimit = Math.min(tool.maxRows ?? this.maxRows, this.maxRows);
     const adapter = await this.adapter(source);
-    const rows = await adapter.query(capRows(bound.text, source.engine, rowLimit), bound.params, { timeoutMs: this.timeoutMs });
+    const rows = await adapter.query(capRows(bound.text, source.engine, rowLimit), bound.params, {
+      timeoutMs: this.timeoutMs,
+    });
     const truncated = rows.length > rowLimit;
     return { rows: (truncated ? rows.slice(0, rowLimit) : rows).map(normalizeRow), truncated, rowLimit };
   }
@@ -74,7 +81,9 @@ export class DatabaseService {
     if (!adapter) {
       const connectionString = this.env[source.connectionEnv];
       if (!connectionString) {
-        return Promise.reject(new Error(`Environment variable ${source.connectionEnv} (connection for source "${source.name}") isn't set.`));
+        return Promise.reject(
+          new Error(`Environment variable ${source.connectionEnv} (connection for source "${source.name}") isn't set.`),
+        );
       }
       adapter = this.factory(source, connectionString, this.timeoutMs);
       // Forget a failed connection so the next question retries it.

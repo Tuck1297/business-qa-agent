@@ -10,7 +10,9 @@ const top = findTool(set, 'top_unpaid_customers')!;
 const tickets = findTool(set, 'open_tickets_by_priority')!;
 const overdue = findTool(set, 'overdue_invoices')!;
 
-function fakeAdapter(rows: Record<string, unknown>[]): DbAdapter & { calls: Array<{ sql: string; params: unknown[] }>; closed: boolean } {
+function fakeAdapter(
+  rows: Record<string, unknown>[],
+): DbAdapter & { calls: Array<{ sql: string; params: unknown[] }>; closed: boolean } {
   return {
     calls: [],
     closed: false,
@@ -55,7 +57,12 @@ describe('DatabaseService', () => {
 
   it('trims to the cap and flags truncation', async () => {
     const rows = Array.from({ length: 4 }, (_, i) => ({ priority: `p${i}`, open_tickets: i }));
-    const db = new DatabaseService(set, { timeoutMs: 1000, maxRows: 3, env: { SUPPORT_DATABASE_URL: 'x' }, factory: async () => fakeAdapter(rows) });
+    const db = new DatabaseService(set, {
+      timeoutMs: 1000,
+      maxRows: 3,
+      env: { SUPPORT_DATABASE_URL: 'x' },
+      factory: async () => fakeAdapter(rows),
+    });
     const result = await db.run(tickets, {});
     assert.equal(result.rows.length, 3);
     assert.equal(result.truncated, true);
@@ -68,14 +75,20 @@ describe('DatabaseService', () => {
       timeoutMs: 1000,
       maxRows: 10,
       env: { SUPPORT_DATABASE_URL: 'x' },
-      factory: async () => fakeAdapter([{ big: 9007199254740993n, when: new Date('2026-10-01T00:00:00Z'), blob: new Uint8Array(4) }]),
+      factory: async () =>
+        fakeAdapter([{ big: 9007199254740993n, when: new Date('2026-10-01T00:00:00Z'), blob: new Uint8Array(4) }]),
     });
     const { rows } = await db.run(tickets, {});
     assert.deepEqual(rows[0], { big: '9007199254740993', when: '2026-10-01T00:00:00.000Z', blob: '<4 bytes>' });
   });
 
   it('explains a missing connection variable and retries a failed connection next time', async () => {
-    const missing = new DatabaseService(set, { timeoutMs: 1000, maxRows: 10, env: {}, factory: async () => fakeAdapter([]) });
+    const missing = new DatabaseService(set, {
+      timeoutMs: 1000,
+      maxRows: 10,
+      env: {},
+      factory: async () => fakeAdapter([]),
+    });
     await assert.rejects(missing.run(tickets, {}), /SUPPORT_DATABASE_URL/);
 
     let attempts = 0;

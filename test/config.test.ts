@@ -22,9 +22,15 @@ describe('config', () => {
   });
 
   it('validates the locale and currency used to format merge fields', () => {
-    assert.deepEqual(loadConfig({ ...minimal, LOCALE: 'de-DE', CURRENCY: 'eur' }).format, { locale: 'de-DE', currency: 'EUR' });
+    assert.deepEqual(loadConfig({ ...minimal, LOCALE: 'de-DE', CURRENCY: 'eur' }).format, {
+      locale: 'de-DE',
+      currency: 'EUR',
+    });
     assert.throws(() => loadConfig({ ...minimal, CURRENCY: 'DOLLARS' }), /CURRENCY/);
-    assert.throws(() => loadConfig({ ...minimal, MAX_TOOL_CALLS: '20' }), /MAX_TOOL_CALLS must be a number from 1 to 8/);
+    assert.throws(
+      () => loadConfig({ ...minimal, MAX_TOOL_CALLS: '20' }),
+      /MAX_TOOL_CALLS must be a number from 1 to 8/,
+    );
   });
 
   it('refuses to listen on a network address without API_TOKEN', () => {
@@ -34,9 +40,20 @@ describe('config', () => {
 
   it('enables AI Search only with its account and token', () => {
     assert.throws(() => loadConfig({ ...minimal, CF_AI_SEARCH_INSTANCE: 'docs' }), /CF_ACCOUNT_ID/);
-    const c = loadConfig({ ...minimal, CF_AI_SEARCH_INSTANCE: 'docs', CF_ACCOUNT_ID: 'a', CF_API_TOKEN: 't', CF_AI_SEARCH_MATCH_THRESHOLD: '0.3' });
+    const c = loadConfig({
+      ...minimal,
+      CF_AI_SEARCH_INSTANCE: 'docs',
+      CF_ACCOUNT_ID: 'a',
+      CF_API_TOKEN: 't',
+      CF_AI_SEARCH_MATCH_THRESHOLD: '0.3',
+    });
     assert.deepEqual(
-      { instance: c.aiSearch?.instance, namespace: c.aiSearch?.namespace, max: c.aiSearch?.maxResults, threshold: c.aiSearch?.matchThreshold },
+      {
+        instance: c.aiSearch?.instance,
+        namespace: c.aiSearch?.namespace,
+        max: c.aiSearch?.maxResults,
+        threshold: c.aiSearch?.matchThreshold,
+      },
       { instance: 'docs', namespace: 'default', max: 10, threshold: 0.3 },
     );
   });
@@ -44,7 +61,17 @@ describe('config', () => {
   it('validates numbers and requires the OpenAI key', () => {
     assert.throws(() => loadConfig({}), /OPENAI_API_KEY/);
     assert.throws(() => loadConfig({ ...minimal, MAX_ROWS: 'lots' }), /MAX_ROWS must be a number/);
-    assert.throws(() => loadConfig({ ...minimal, CF_AI_SEARCH_INSTANCE: 'd', CF_ACCOUNT_ID: 'a', CF_API_TOKEN: 't', CF_AI_SEARCH_MAX_RESULTS: '80' }), /from 1 to 50/);
+    assert.throws(
+      () =>
+        loadConfig({
+          ...minimal,
+          CF_AI_SEARCH_INSTANCE: 'd',
+          CF_ACCOUNT_ID: 'a',
+          CF_API_TOKEN: 't',
+          CF_AI_SEARCH_MAX_RESULTS: '80',
+        }),
+      /from 1 to 50/,
+    );
     assert.throws(() => loadConfig({ ...minimal, PORT: '80.5' }), /whole number/);
     assert.equal(loadConfig({ ...minimal, SHOW_SQL: 'false' }).database.showSql, false);
   });

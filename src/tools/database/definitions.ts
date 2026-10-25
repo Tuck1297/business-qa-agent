@@ -10,11 +10,30 @@ import { findNamedParams } from './sql.ts';
 
 export type Engine = 'postgres' | 'sqlserver';
 export type ParamType = 'string' | 'number' | 'integer' | 'boolean' | 'date' | 'datetime';
-export type FieldFormat = 'text' | 'number' | 'integer' | 'currency' | 'percent' | 'date' | 'month' | 'datetime' | 'boolean';
+export type FieldFormat =
+  | 'text'
+  | 'number'
+  | 'integer'
+  | 'currency'
+  | 'percent'
+  | 'date'
+  | 'month'
+  | 'datetime'
+  | 'boolean';
 
 export const ENGINES: readonly Engine[] = ['postgres', 'sqlserver'];
 export const PARAM_TYPES: readonly ParamType[] = ['string', 'number', 'integer', 'boolean', 'date', 'datetime'];
-export const FIELD_FORMATS: readonly FieldFormat[] = ['text', 'number', 'integer', 'currency', 'percent', 'date', 'month', 'datetime', 'boolean'];
+export const FIELD_FORMATS: readonly FieldFormat[] = [
+  'text',
+  'number',
+  'integer',
+  'currency',
+  'percent',
+  'date',
+  'month',
+  'datetime',
+  'boolean',
+];
 
 export interface ToolSource {
   name: string;
@@ -88,7 +107,9 @@ export async function loadTools(path: string): Promise<ToolSet> {
   try {
     text = await readFile(path, 'utf8');
   } catch (error) {
-    throw new Error(`Couldn't read the tools file at ${path}. Copy tools.example.json to tools.json and define your tools. (${String(error)})`);
+    throw new Error(
+      `Couldn't read the tools file at ${path}. Copy tools.example.json to tools.json and define your tools. (${String(error)})`,
+    );
   }
   let parsed: unknown;
   try {
@@ -110,7 +131,8 @@ export function validateTools(value: unknown): ToolSet {
   value.sources.forEach((source: unknown, i: number) => {
     const where = `sources[${i}]`;
     if (!isObject(source)) return problems.push(`${where} must be an object.`);
-    if (typeof source.name !== 'string' || !SOURCE_NAME.test(source.name)) problems.push(`${where}.name must be a simple name.`);
+    if (typeof source.name !== 'string' || !SOURCE_NAME.test(source.name))
+      problems.push(`${where}.name must be a simple name.`);
     else if (sources.has(source.name)) problems.push(`${where}.name "${source.name}" is used twice.`);
     if (!ENGINES.includes(source.engine as Engine)) problems.push(`${where}.engine must be "postgres" or "sqlserver".`);
     else if (typeof source.name === 'string') sources.set(source.name, source.engine as Engine);
@@ -127,7 +149,8 @@ export function validateTools(value: unknown): ToolSet {
     const name = isObject(tool) && typeof tool.name === 'string' ? tool.name : `#${ti}`;
     const where = `tool "${name}"`;
     if (!isObject(tool)) return problems.push(`tools[${ti}] must be an object.`);
-    if (typeof tool.name !== 'string' || !TOOL_NAME.test(tool.name)) problems.push(`${where}: name must be snake_case (a-z, 0-9, _), up to 48 characters.`);
+    if (typeof tool.name !== 'string' || !TOOL_NAME.test(tool.name))
+      problems.push(`${where}: name must be snake_case (a-z, 0-9, _), up to 48 characters.`);
     else if (toolNames.has(tool.name)) problems.push(`${where}: the name is used twice.`);
     else toolNames.add(tool.name);
     if (typeof tool.description !== 'string' || tool.description.trim().length < 10) {
@@ -135,8 +158,12 @@ export function validateTools(value: unknown): ToolSet {
     }
     const engine = typeof tool.source === 'string' ? sources.get(tool.source) : undefined;
     if (!engine) problems.push(`${where}: source "${String(tool.source)}" isn't one of the sources.`);
-    if (tool.resultDescription !== undefined && typeof tool.resultDescription !== 'string') problems.push(`${where}: resultDescription must be text.`);
-    if (tool.maxRows !== undefined && (!Number.isInteger(tool.maxRows) || (tool.maxRows as number) < 1 || (tool.maxRows as number) > 10_000)) {
+    if (tool.resultDescription !== undefined && typeof tool.resultDescription !== 'string')
+      problems.push(`${where}: resultDescription must be text.`);
+    if (
+      tool.maxRows !== undefined &&
+      (!Number.isInteger(tool.maxRows) || (tool.maxRows as number) < 1 || (tool.maxRows as number) > 10_000)
+    ) {
       problems.push(`${where}: maxRows must be a whole number from 1 to 10000.`);
     }
 
@@ -149,12 +176,17 @@ export function validateTools(value: unknown): ToolSet {
       if (!isObject(p)) return problems.push(`${pw} must be an object.`);
       if (typeof p.name !== 'string' || !PARAM_NAME.test(p.name)) problems.push(`${pw}: name must be snake_case.`);
       else if (declared.has(p.name)) problems.push(`${pw}: declared twice.`);
-      if (!PARAM_TYPES.includes(p.type as ParamType)) problems.push(`${pw}: type must be one of ${PARAM_TYPES.join(', ')}.`);
-      if (typeof p.description !== 'string' || p.description.trim() === '') problems.push(`${pw}: description is required (the model fills the value from it).`);
-      if (p.required !== undefined && typeof p.required !== 'boolean') problems.push(`${pw}: required must be true or false.`);
+      if (!PARAM_TYPES.includes(p.type as ParamType))
+        problems.push(`${pw}: type must be one of ${PARAM_TYPES.join(', ')}.`);
+      if (typeof p.description !== 'string' || p.description.trim() === '')
+        problems.push(`${pw}: description is required (the model fills the value from it).`);
+      if (p.required !== undefined && typeof p.required !== 'boolean')
+        problems.push(`${pw}: required must be true or false.`);
       if (p.enum !== undefined) {
         if (!Array.isArray(p.enum) || p.enum.length === 0) problems.push(`${pw}: enum must be a non-empty array.`);
-        else if (!p.enum.every((v) => typeof v === (p.type === 'number' || p.type === 'integer' ? 'number' : 'string'))) {
+        else if (
+          !p.enum.every((v) => typeof v === (p.type === 'number' || p.type === 'integer' ? 'number' : 'string'))
+        ) {
           problems.push(`${pw}: enum values must match the parameter type.`);
         }
       }
@@ -174,8 +206,10 @@ export function validateTools(value: unknown): ToolSet {
     } else if (engine) {
       for (const problem of checkSql(tool.sql, engine)) problems.push(`${where}: ${problem}`);
       const used = new Set(findNamedParams(tool.sql, engine).map((m) => m.name));
-      for (const u of used) if (!declared.has(u)) problems.push(`${where}: the SQL uses :${u}, which isn't a declared parameter.`);
-      for (const d of declared.keys()) if (!used.has(d)) problems.push(`${where}: parameter "${d}" is declared but the SQL never uses :${d}.`);
+      for (const u of used)
+        if (!declared.has(u)) problems.push(`${where}: the SQL uses :${u}, which isn't a declared parameter.`);
+      for (const d of declared.keys())
+        if (!used.has(d)) problems.push(`${where}: parameter "${d}" is declared but the SQL never uses :${d}.`);
     }
 
     // Output
@@ -185,11 +219,14 @@ export function validateTools(value: unknown): ToolSet {
     (output ?? []).forEach((f: unknown, fi: number) => {
       const fw = `${where} output field ${isObject(f) && typeof f.name === 'string' ? `"${f.name}"` : `#${fi}`}`;
       if (!isObject(f)) return problems.push(`${fw} must be an object.`);
-      if (typeof f.name !== 'string' || !FIELD_NAME.test(f.name)) problems.push(`${fw}: name must be letters, digits and _ (name the column with AS).`);
+      if (typeof f.name !== 'string' || !FIELD_NAME.test(f.name))
+        problems.push(`${fw}: name must be letters, digits and _ (name the column with AS).`);
       else if (fieldNames.has(f.name)) problems.push(`${fw}: listed twice.`);
       else fieldNames.add(f.name);
-      if (typeof f.description !== 'string' || f.description.trim() === '') problems.push(`${fw}: description is required (the model writes the answer from it).`);
-      if (f.format !== undefined && !FIELD_FORMATS.includes(f.format as FieldFormat)) problems.push(`${fw}: format must be one of ${FIELD_FORMATS.join(', ')}.`);
+      if (typeof f.description !== 'string' || f.description.trim() === '')
+        problems.push(`${fw}: description is required (the model writes the answer from it).`);
+      if (f.format !== undefined && !FIELD_FORMATS.includes(f.format as FieldFormat))
+        problems.push(`${fw}: format must be one of ${FIELD_FORMATS.join(', ')}.`);
       if (f.label !== undefined && typeof f.label !== 'string') problems.push(`${fw}: label must be text.`);
     });
   });
@@ -202,7 +239,8 @@ export function validateTools(value: unknown): ToolSet {
 export function checkSql(sql: string, engine: Engine): string[] {
   const problems: string[] = [];
   const body = normalizeSql(sql);
-  if (!/^(select|with)\b/i.test(stripLeadingComments(body))) problems.push('sql must be a single SELECT (or WITH … SELECT) statement.');
+  if (!/^(select|with)\b/i.test(stripLeadingComments(body)))
+    problems.push('sql must be a single SELECT (or WITH … SELECT) statement.');
   if (hasStatementSeparator(body, engine)) problems.push('sql must be one statement (no ";" in the middle).');
   return problems;
 }

@@ -17,7 +17,16 @@ class ScriptedAgent implements AskHandler {
     const at = new Date().toISOString();
     emit({ type: 'run.started', runId, question, at });
     emit({ type: 'step.started', runId, step: 'route', key: 'route', label: 'Routing', at });
-    emit({ type: 'step.completed', runId, step: 'route', key: 'route', label: 'Routing', durationMs: 1, data: { purpose: 'business_data' }, at });
+    emit({
+      type: 'step.completed',
+      runId,
+      step: 'route',
+      key: 'route',
+      label: 'Routing',
+      durationMs: 1,
+      data: { purpose: 'business_data' },
+      at,
+    });
     if (question.includes('slow')) {
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(resolve, 2_000);
@@ -49,7 +58,12 @@ let base: string;
 const agent = new ScriptedAgent();
 
 before(async () => {
-  server = createHttpServer({ agent, apiToken: TOKEN, status: { database: true, documents: false }, indexHtmlPath: null });
+  server = createHttpServer({
+    agent,
+    apiToken: TOKEN,
+    status: { database: true, documents: false },
+    indexHtmlPath: null,
+  });
   wss = await attachWebSocket(server, agent, TOKEN);
   assert.ok(wss, 'the ws package should be installed for these tests');
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -97,7 +111,10 @@ describe('HTTP API', () => {
     assert.equal(res.status, 200);
     const body = (await res.json()) as { answer: string; events: AgentEvent[] };
     assert.equal(body.answer, 'Hello world');
-    assert.deepEqual(body.events.map((e) => e.type), ['run.started', 'step.started', 'step.completed', 'run.completed']);
+    assert.deepEqual(
+      body.events.map((e) => e.type),
+      ['run.started', 'step.started', 'step.completed', 'run.completed'],
+    );
   });
 
   it('POST /ask returns 502 with the events when the run fails', async () => {
@@ -121,12 +138,20 @@ describe('HTTP API', () => {
         assert.equal(eventLine, `event: ${parsed.type}`);
         return parsed;
       });
-    assert.deepEqual(events.map((e) => e.type), ['run.started', 'step.started', 'step.completed', 'answer.delta', 'answer.delta', 'run.completed']);
+    assert.deepEqual(
+      events.map((e) => e.type),
+      ['run.started', 'step.started', 'step.completed', 'answer.delta', 'answer.delta', 'run.completed'],
+    );
   });
 });
 
 describe('WebSocket /ws', () => {
-  function connect(): Promise<{ ws: WebSocket; messages: Array<Record<string, unknown>>; next: (type: string) => Promise<Record<string, unknown>>; closed: Promise<number> }> {
+  function connect(): Promise<{
+    ws: WebSocket;
+    messages: Array<Record<string, unknown>>;
+    next: (type: string) => Promise<Record<string, unknown>>;
+    closed: Promise<number>;
+  }> {
     const ws = new WebSocket(`${base.replace('http', 'ws')}/ws`);
     const messages: Array<Record<string, unknown>> = [];
     const waiters: Array<{ type: string; resolve: (m: Record<string, unknown>) => void }> = [];
@@ -163,7 +188,14 @@ describe('WebSocket /ws', () => {
     const done = await c.next('run.completed');
     assert.equal(done.answer, 'Hello world');
     const runEvents = c.messages.filter((m) => m.requestId === 'q1').map((m) => m.type);
-    assert.deepEqual(runEvents, ['run.started', 'step.started', 'step.completed', 'answer.delta', 'answer.delta', 'run.completed']);
+    assert.deepEqual(runEvents, [
+      'run.started',
+      'step.started',
+      'step.completed',
+      'answer.delta',
+      'answer.delta',
+      'run.completed',
+    ]);
     c.ws.close();
   });
 

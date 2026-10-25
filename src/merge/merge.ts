@@ -61,7 +61,12 @@ export function emptyReport(): MergeReport {
 }
 
 /** Fill every merge field in a complete template. */
-export function renderTemplate(template: string, sources: MergeSource[], options: MergeOptions, report = emptyReport()): string {
+export function renderTemplate(
+  template: string,
+  sources: MergeSource[],
+  options: MergeOptions,
+  report = emptyReport(),
+): string {
   const byId = new Map(sources.map((s) => [s.id, s]));
   return template.replace(TOKEN, (whole, expr: string) => {
     report.fields += 1;
@@ -164,7 +169,9 @@ function renderField(
       case 'list': {
         if (values.length === 0) return 'none';
         const items = values.map((v) => formatValue(v, format, options));
-        return new Intl.ListFormat(options.locale, { type: 'conjunction' }).format(source.truncated ? [...items, 'more'] : items);
+        return new Intl.ListFormat(options.locale, { type: 'conjunction' }).format(
+          source.truncated ? [...items, 'more'] : items,
+        );
       }
       case 'sum':
       case 'avg': {
@@ -176,8 +183,17 @@ function renderField(
       case 'min':
       case 'max': {
         if (values.length === 0) return EMPTY_VALUE;
-        const numeric = values.every((v) => Number.isFinite(Number(v)) && format !== 'date' && format !== 'month' && format !== 'datetime' && format !== 'text');
-        const sorted = [...values].sort((a, b) => (numeric ? Number(a) - Number(b) : String(a).localeCompare(String(b))));
+        const numeric = values.every(
+          (v) =>
+            Number.isFinite(Number(v)) &&
+            format !== 'date' &&
+            format !== 'month' &&
+            format !== 'datetime' &&
+            format !== 'text',
+        );
+        const sorted = [...values].sort((a, b) =>
+          numeric ? Number(a) - Number(b) : String(a).localeCompare(String(b)),
+        );
         return formatValue(m[1] === 'min' ? sorted[0] : sorted[sorted.length - 1], format, options);
       }
     }
@@ -202,7 +218,9 @@ export function markdownTable(source: MergeSource, options: MergeOptions): strin
   const cell = (text: string) => text.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
   const header = `| ${source.fields.map((f) => cell(f.label ?? f.name)).join(' | ')} |`;
   const divider = `| ${source.fields.map((f) => (isNumericFormat(f.format) ? '---:' : '---')).join(' | ')} |`;
-  const body = source.rows.map((row) => `| ${source.fields.map((f) => cell(formatValue(row[f.name], f.format ?? 'text', options))).join(' | ')} |`);
+  const body = source.rows.map(
+    (row) => `| ${source.fields.map((f) => cell(formatValue(row[f.name], f.format ?? 'text', options))).join(' | ')} |`,
+  );
   const lines = [header, divider, ...body];
   if (source.truncated) lines.push('', `_Showing the first ${source.rowLimit} rows._`);
   return lines.join('\n');
@@ -210,19 +228,30 @@ export function markdownTable(source: MergeSource, options: MergeOptions): strin
 
 export function formatValue(value: unknown, format: FieldFormat, options: MergeOptions): string {
   if (value === null || value === undefined || value === '') return EMPTY_VALUE;
-  const num = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN;
+  const num =
+    typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN;
   try {
     switch (format) {
       case 'currency':
-        return Number.isFinite(num) ? new Intl.NumberFormat(options.locale, { style: 'currency', currency: options.currency }).format(num) : String(value);
+        return Number.isFinite(num)
+          ? new Intl.NumberFormat(options.locale, { style: 'currency', currency: options.currency }).format(num)
+          : String(value);
       case 'percent':
-        return Number.isFinite(num) ? new Intl.NumberFormat(options.locale, { style: 'percent', maximumFractionDigits: 1 }).format(num) : String(value);
+        return Number.isFinite(num)
+          ? new Intl.NumberFormat(options.locale, { style: 'percent', maximumFractionDigits: 1 }).format(num)
+          : String(value);
       case 'number':
-        return Number.isFinite(num) ? new Intl.NumberFormat(options.locale, { maximumFractionDigits: 2 }).format(num) : String(value);
+        return Number.isFinite(num)
+          ? new Intl.NumberFormat(options.locale, { maximumFractionDigits: 2 }).format(num)
+          : String(value);
       case 'integer':
-        return Number.isFinite(num) ? new Intl.NumberFormat(options.locale, { maximumFractionDigits: 0 }).format(num) : String(value);
+        return Number.isFinite(num)
+          ? new Intl.NumberFormat(options.locale, { maximumFractionDigits: 0 }).format(num)
+          : String(value);
       case 'boolean':
-        return value === true || value === 1 || ['true', 't', '1', 'yes'].includes(String(value).toLowerCase()) ? 'Yes' : 'No';
+        return value === true || value === 1 || ['true', 't', '1', 'yes'].includes(String(value).toLowerCase())
+          ? 'Yes'
+          : 'No';
       case 'date':
       case 'month': {
         const date = dateOnly(value);
@@ -237,7 +266,11 @@ export function formatValue(value: unknown, format: FieldFormat, options: MergeO
       case 'datetime': {
         const date = value instanceof Date ? value : new Date(String(value));
         if (Number.isNaN(date.getTime())) return String(value);
-        return new Intl.DateTimeFormat(options.locale, { timeZone: options.timeZone, dateStyle: 'medium', timeStyle: 'short' }).format(date);
+        return new Intl.DateTimeFormat(options.locale, {
+          timeZone: options.timeZone,
+          dateStyle: 'medium',
+          timeStyle: 'short',
+        }).format(date);
       }
       case 'text':
         return value instanceof Date ? value.toISOString() : String(value);
